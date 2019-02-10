@@ -1,0 +1,48 @@
+commit b982c80c14d2809534759404703b398fdfdf5d55
+Author: Xiang Li <xiangli.cs@gmail.com>
+Date:   Wed Aug 31 16:34:26 2016 -0700
+
+    grpcproxy: fix data race
+
+diff --git a/proxy/grpcproxy/watch.go b/proxy/grpcproxy/watch.go
+index 594efcd..0a317d9 100644
+--- a/proxy/grpcproxy/watch.go
++++ b/proxy/grpcproxy/watch.go
+@@ -86,9 +86,23 @@ type serverWatchStream struct {
+ func (sws *serverWatchStream) close() {
+ 	close(sws.watchCh)
+ 	close(sws.ctrlCh)
++
++	var wg sync.WaitGroup
++	sws.mu.Lock()
+ 	for _, ws := range sws.singles {
++		wg.Add(1)
+ 		ws.stop()
++		// copy the range variable to avoid race
++		copyws := ws
++		go func() {
++			<-copyws.stopNotify()
++			wg.Done()
++		}()
+ 	}
++	sws.mu.Unlock()
++
++	wg.Wait()
++
+ 	sws.groups.stop()
+ }
+ 
+diff --git a/proxy/grpcproxy/watcher_single.go b/proxy/grpcproxy/watcher_single.go
+index d2f5f55..0b94e5e 100644
+--- a/proxy/grpcproxy/watcher_single.go
++++ b/proxy/grpcproxy/watcher_single.go
+@@ -70,5 +70,8 @@ func (ws watcherSingle) canPromote() bool {
+ 
+ func (ws watcherSingle) stop() {
+ 	ws.cancel()
+-	<-ws.donec
++}
++
++func (ws watcherSingle) stopNotify() <-chan struct{} {
++	return ws.donec
+ }

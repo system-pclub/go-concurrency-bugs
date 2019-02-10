@@ -1,0 +1,32 @@
+commit 7afc490c95789c408fbc256d8e790273d331c984
+Author: Alexander Morozov <lk4d4math@gmail.com>
+Date:   Tue Nov 15 15:38:03 2016 -0800
+
+    raft: return empty status if node is stopped
+    
+    If the node is stopped, then Status can hang forever because there is no
+    event loop to answer. So, just return empty status to avoid deadlocks.
+    
+    Fix #6855
+    
+    Signed-off-by: Alexander Morozov <lk4d4math@gmail.com>
+
+diff --git a/raft/node.go b/raft/node.go
+index 5fce584..c8410fd 100644
+--- a/raft/node.go
++++ b/raft/node.go
+@@ -462,8 +462,12 @@ func (n *node) ApplyConfChange(cc pb.ConfChange) *pb.ConfState {
+ 
+ func (n *node) Status() Status {
+ 	c := make(chan Status)
+-	n.status <- c
+-	return <-c
++	select {
++	case n.status <- c:
++		return <-c
++	case <-n.done:
++		return Status{}
++	}
+ }
+ 
+ func (n *node) ReportUnreachable(id uint64) {

@@ -1,0 +1,23 @@
+commit b32478488ce6d373e44bb8a6c9cb986c773ad48e
+Author: Alexander Morozov <lk4d4@docker.com>
+Date:   Mon Jun 6 11:29:47 2016 -0700
+
+    ioutils: fix race in access closeErr in bytespipe
+    
+    Signed-off-by: Alexander Morozov <lk4d4@docker.com>
+
+diff --git a/pkg/ioutils/bytespipe.go b/pkg/ioutils/bytespipe.go
+index eca129b..72a04f3 100644
+--- a/pkg/ioutils/bytespipe.go
++++ b/pkg/ioutils/bytespipe.go
+@@ -133,8 +133,9 @@ func (bp *BytesPipe) Read(p []byte) (n int, err error) {
+ 		}
+ 		bp.wait.Wait()
+ 		if bp.bufLen == 0 && bp.closeErr != nil {
++			err := bp.closeErr
+ 			bp.mu.Unlock()
+-			return 0, bp.closeErr
++			return 0, err
+ 		}
+ 	}
+ 

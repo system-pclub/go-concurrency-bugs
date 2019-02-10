@@ -1,0 +1,9 @@
+commit 5a547ed72c09faf4050739d54caea1d51f4d276d
+Merge: 7c6103d 069ed42
+Author: Qi Zhao <toqizhao@gmail.com>
+Date:   Fri Jul 29 10:00:30 2016 -0700
+
+    Merge pull request #795 from tamird/graceful-deadlock
+    
+    Fix deadlock when GracefulStop()ing multiple times
+

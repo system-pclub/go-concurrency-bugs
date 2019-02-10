@@ -1,0 +1,31 @@
+commit c29d6389e66f5da1a226df88607857aab4db9f7a
+Author: Benoit Sigoure <tsunanet@gmail.com>
+Date:   Fri Aug 25 19:18:52 2017 +0100
+
+    transport: Fix deadlock in client keepalive. (#1460)
+    
+    When gRPC keepalives are enabled (which isn't the case by default at
+    this time) and PermitWithoutStream is false (the default), the client
+    can deadlock when transitioning between having no active stream and
+    having one active stream.  Subsequent attempts to create a new stream
+    or to close the client will hang on the transport's mutex, while the
+    keepalive goroutine is waiting indefinitely on a channel while holding
+    the transport's mutex.
+    
+    This fixes #1459.
+
+diff --git a/transport/http2_client.go b/transport/http2_client.go
+index bccc056..8546d09 100644
+--- a/transport/http2_client.go
++++ b/transport/http2_client.go
+@@ -435,6 +435,10 @@ func (t *http2Client) NewStream(ctx context.Context, callHdr *CallHdr) (_ *Strea
+ 		select {
+ 		case t.awakenKeepalive <- struct{}{}:
+ 			t.framer.writePing(false, false, [8]byte{})
++			// Fill the awakenKeepalive channel again as this channel must be
++			// kept non-writable except at the point that the keepalive()
++			// goroutine is waiting either to be awaken or shutdown.
++			t.awakenKeepalive <- struct{}{}
+ 		default:
+ 		}
+ 	}

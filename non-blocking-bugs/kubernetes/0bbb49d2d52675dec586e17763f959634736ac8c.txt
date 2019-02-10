@@ -1,0 +1,15 @@
+commit 0bbb49d2d52675dec586e17763f959634736ac8c
+Merge: b79ae1c fb3a1d6
+Author: Kubernetes Submit Queue <k8s-merge-robot@users.noreply.github.com>
+Date:   Fri Jan 6 16:02:16 2017 -0800
+
+    Merge pull request #39479 from fraenkel/podkiller
+    
+    Automatic merge from submit-queue
+    
+    Avoid panic when stopping the podKiller
+    
+    use a mutex instead of a channel
+    
+    fixes #38857
+

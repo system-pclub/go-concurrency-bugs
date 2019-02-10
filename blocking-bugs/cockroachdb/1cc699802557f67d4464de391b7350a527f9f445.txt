@@ -1,0 +1,29 @@
+commit 1cc699802557f67d4464de391b7350a527f9f445
+Author: Kenji Kaneda <kaneda@squareup.com>
+Date:   Tue Apr 7 23:20:47 2015 -0700
+
+    Call g.mu.Unlock() before calling break
+    
+    I haven't written a test case, but I'm guessing some of the
+    goroutines might get into deadlock during shutdown.
+
+diff --git a/gossip/gossip.go b/gossip/gossip.go
+index 9ef2b81..6896868 100644
+--- a/gossip/gossip.go
++++ b/gossip/gossip.go
+@@ -352,6 +352,7 @@ func (g *Gossip) bootstrap() {
+ 		g.mu.Lock()
+ 		g.parseBootstrapAddresses()
+ 		if g.closed {
++			g.mu.Unlock()
+ 			break
+ 		}
+ 		// Find list of available bootstrap hosts.
+@@ -443,6 +444,7 @@ func (g *Gossip) manage() {
+ 
+ 		// The exit condition.
+ 		if g.closed && g.outgoing.len() == 0 {
++			g.mu.Unlock()
+ 			break
+ 		}
+ 		g.mu.Unlock()

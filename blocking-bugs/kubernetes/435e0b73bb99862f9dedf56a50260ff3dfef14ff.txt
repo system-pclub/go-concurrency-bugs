@@ -1,0 +1,59 @@
+commit 435e0b73bb99862f9dedf56a50260ff3dfef14ff
+Author: Andrew M Bursavich <abursavich@gmail.com>
+Date:   Mon Sep 15 12:07:32 2014 -0700
+
+    pkg/watch: fix potential deadlock
+
+diff --git a/pkg/watch/mux.go b/pkg/watch/mux.go
+index 0c87111..2d40014 100644
+--- a/pkg/watch/mux.go
++++ b/pkg/watch/mux.go
+@@ -56,9 +56,10 @@ func (m *Mux) Watch() Interface {
+ 	id := m.nextWatcher
+ 	m.nextWatcher++
+ 	w := &muxWatcher{
+-		result: make(chan Event),
+-		id:     id,
+-		m:      m,
++		result:  make(chan Event),
++		stopped: make(chan struct{}),
++		id:      id,
++		m:       m,
+ 	}
+ 	m.watchers[id] = w
+ 	return w
+@@ -119,15 +120,20 @@ func (m *Mux) distribute(event Event) {
+ 	m.lock.Lock()
+ 	defer m.lock.Unlock()
+ 	for _, w := range m.watchers {
+-		w.result <- event
++		select {
++		case w.result <- event:
++		case <-w.stopped:
++		}
+ 	}
+ }
+ 
+ // muxWatcher handles a single watcher of a mux
+ type muxWatcher struct {
+-	result chan Event
+-	id     int64
+-	m      *Mux
++	result  chan Event
++	stopped chan struct{}
++	stop    sync.Once
++	id      int64
++	m       *Mux
+ }
+ 
+ // ResultChan returns a channel to use for waiting on events.
+@@ -137,5 +143,8 @@ func (mw *muxWatcher) ResultChan() <-chan Event {
+ 
+ // Stop stops watching and removes mw from its list.
+ func (mw *muxWatcher) Stop() {
+-	mw.m.stopWatching(mw.id)
++	mw.stop.Do(func() {
++		close(mw.stopped)
++		mw.m.stopWatching(mw.id)
++	})
+ }

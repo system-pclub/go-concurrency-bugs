@@ -1,0 +1,27 @@
+commit cb9a3e04b141d150a370f1e6329428b621742041
+Author: Andrei Korzhevskii <a.korzhevskiy@gmail.com>
+Date:   Fri Nov 27 13:52:24 2015 +0300
+
+    client: fix goroutine leak in unreleased context
+    
+    If headerTimeout is not zero then two context are created but only one is released.
+    cancelCtx in this case is never released which leads to goroutine leak inside it.
+
+diff --git a/client/client.go b/client/client.go
+index da86a0b..ece4cc0 100644
+--- a/client/client.go
++++ b/client/client.go
+@@ -378,9 +378,12 @@ func (c *simpleHTTPClient) Do(ctx context.Context, act httpAction) (*http.Respon
+ 		return nil, nil, err
+ 	}
+ 
+-	hctx, hcancel := context.WithCancel(ctx)
++	var hctx context.Context
++	var hcancel context.CancelFunc
+ 	if c.headerTimeout > 0 {
+ 		hctx, hcancel = context.WithTimeout(ctx, c.headerTimeout)
++	} else {
++		hctx, hcancel = context.WithCancel(ctx)
+ 	}
+ 	defer hcancel()
+ 

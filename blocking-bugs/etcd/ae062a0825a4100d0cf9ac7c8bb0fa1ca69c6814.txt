@@ -1,0 +1,29 @@
+commit ae062a0825a4100d0cf9ac7c8bb0fa1ca69c6814
+Author: Brian Waldon <brian@waldon.cc>
+Date:   Thu Jan 29 16:12:34 2015 -0800
+
+    client: move lock so MembersAPI.List doesn't deadlock
+
+diff --git a/client/client.go b/client/client.go
+index 7ddcd84..53bb8ca 100644
+--- a/client/client.go
++++ b/client/client.go
+@@ -223,15 +223,15 @@ func (c *httpClusterClient) Endpoints() []string {
+ }
+ 
+ func (c *httpClusterClient) Sync(ctx context.Context) error {
+-	c.Lock()
+-	defer c.Unlock()
+-
+ 	mAPI := NewMembersAPI(c)
+ 	ms, err := mAPI.List(ctx)
+ 	if err != nil {
+ 		return err
+ 	}
+ 
++	c.Lock()
++	defer c.Unlock()
++
+ 	eps := make([]string, 0)
+ 	for _, m := range ms {
+ 		eps = append(eps, m.ClientURLs...)

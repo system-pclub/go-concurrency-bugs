@@ -1,0 +1,70 @@
+commit 81e5855770d4f80dd9919278049aee5cb4afe47c
+Author: Spencer Kimball <spencer.kimball@gmail.com>
+Date:   Tue Feb 9 15:27:26 2016 -0500
+
+    Fix data race in node_test TestNodeJoinSelf.
+    
+    Fixes #4264
+
+diff --git a/gossip/resolver/resolver.go b/gossip/resolver/resolver.go
+index 5c5c21d..76e3944 100644
+--- a/gossip/resolver/resolver.go
++++ b/gossip/resolver/resolver.go
+@@ -26,7 +26,7 @@ import (
+ )
+ 
+ // Resolver is an interface which provides an abstract factory for
+-// net.Addr addresses.
++// net.Addr addresses. Resolvers are not thread safe.
+ type Resolver interface {
+ 	Type() string
+ 	Addr() string
+diff --git a/gossip/resolver/socket.go b/gossip/resolver/socket.go
+index a91a6e8..3dafcc7 100644
+--- a/gossip/resolver/socket.go
++++ b/gossip/resolver/socket.go
+@@ -23,8 +23,7 @@ import (
+ )
+ 
+ // socketResolver represents the different types of socket-based
+-// address resolvers. Based on the Type, it may return the same
+-// address multiple times (eg: "lb") or not (eg: "tcp").
++// address resolvers.
+ type socketResolver struct {
+ 	typ       string
+ 	addr      string
+@@ -47,15 +46,12 @@ func (sr *socketResolver) GetAddress() (net.Addr, error) {
+ 		}
+ 		sr.exhausted = true
+ 		return addr, nil
+-	case "tcp", "lb":
++	case "tcp":
+ 		_, err := net.ResolveTCPAddr("tcp", sr.addr)
+ 		if err != nil {
+ 			return nil, err
+ 		}
+-		if sr.typ == "tcp" {
+-			// "tcp" resolvers point to a single host. "lb" have an unknown of number of backends.
+-			sr.exhausted = true
+-		}
++		sr.exhausted = true
+ 		return util.NewUnresolvedAddr("tcp", sr.addr), nil
+ 	}
+ 	return nil, util.Errorf("unknown address type: %q", sr.typ)
+diff --git a/server/node.go b/server/node.go
+index bdd6924..9aa578a 100644
+--- a/server/node.go
++++ b/server/node.go
+@@ -346,10 +346,8 @@ func (n *Node) initStores(engines []engine.Engine, stopper *stop.Stopper) error
+ 		case 0:
+ 			return errNeedsBootstrap
+ 		case 1:
+-			if addr, err := resolvers[0].GetAddress(); err == nil {
+-				if uaddr, ok := addr.(*util.UnresolvedAddr); ok && *uaddr == n.Descriptor.Address {
+-					return errCannotJoinSelf
+-				}
++			if resolvers[0].Addr() == n.Descriptor.Address.String() {
++				return errCannotJoinSelf
+ 			}
+ 		}
+ 	}

@@ -1,0 +1,21 @@
+commit 2fd87597a43629ba6aa5d2406dc1737f83e5f6b1
+Author: Yu-Ju Hong <yjhong@google.com>
+Date:   Thu Apr 16 10:51:33 2015 -0700
+
+    Fix data race in kubelet_test.go
+    
+    Ensure that FakeDockerClient make a copy of the internal list and return it.
+
+diff --git a/pkg/kubelet/dockertools/fake_docker_client.go b/pkg/kubelet/dockertools/fake_docker_client.go
+index baa1a76..6746d6e 100644
+--- a/pkg/kubelet/dockertools/fake_docker_client.go
++++ b/pkg/kubelet/dockertools/fake_docker_client.go
+@@ -139,7 +139,7 @@ func (f *FakeDockerClient) ListContainers(options docker.ListContainersOptions)
+ 	if options.All {
+ 		return append(f.ContainerList, f.ExitedContainerList...), err
+ 	}
+-	return f.ContainerList, err
++	return append([]docker.APIContainers{}, f.ContainerList...), err
+ }
+ 
+ // InspectContainer is a test-spy implementation of DockerInterface.InspectContainer.

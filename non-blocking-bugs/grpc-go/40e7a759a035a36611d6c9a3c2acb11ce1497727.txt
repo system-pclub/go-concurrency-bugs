@@ -1,0 +1,30 @@
+commit 40e7a759a035a36611d6c9a3c2acb11ce1497727
+Author: Menghan Li <menghanl@google.com>
+Date:   Mon Jun 19 13:57:38 2017 -0700
+
+    Protect bytesSent and bytesReceived with mutex to avoid datarace (#1318)
+
+diff --git a/transport/http2_client.go b/transport/http2_client.go
+index 6874a10..f89045e 100644
+--- a/transport/http2_client.go
++++ b/transport/http2_client.go
+@@ -526,7 +526,9 @@ func (t *http2Client) NewStream(ctx context.Context, callHdr *CallHdr) (_ *Strea
+ 			return nil, connectionErrorf(true, err, "transport: %v", err)
+ 		}
+ 	}
++	s.mu.Lock()
+ 	s.bytesSent = true
++	s.mu.Unlock()
+ 
+ 	if t.statsHandler != nil {
+ 		outHeader := &stats.OutHeader{
+@@ -1009,7 +1011,9 @@ func (t *http2Client) operateHeaders(frame *http2.MetaHeadersFrame) {
+ 	if !ok {
+ 		return
+ 	}
++	s.mu.Lock()
+ 	s.bytesReceived = true
++	s.mu.Unlock()
+ 	var state decodeState
+ 	if err := state.decodeResponseHeader(frame); err != nil {
+ 		s.mu.Lock()

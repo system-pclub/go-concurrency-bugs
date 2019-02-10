@@ -1,0 +1,33 @@
+commit 4d2d2cabb9b0dcaa16ffd17e6d53a745740f3468
+Author: Anthony Romano <anthony.romano@coreos.com>
+Date:   Thu Apr 7 13:36:46 2016 -0700
+
+    etcdserver: fix race on consistent index
+
+diff --git a/etcdserver/consistent_index.go b/etcdserver/consistent_index.go
+index e631266..a387b75 100644
+--- a/etcdserver/consistent_index.go
++++ b/etcdserver/consistent_index.go
+@@ -14,12 +14,20 @@
+ 
+ package etcdserver
+ 
++import (
++	"sync/atomic"
++)
++
+ // consistentIndex represents the offset of an entry in a consistent replica log.
+ // It implements the storage.ConsistentIndexGetter interface.
+ // It is always set to the offset of current entry before executing the entry,
+ // so ConsistentWatchableKV could get the consistent index from it.
+ type consistentIndex uint64
+ 
+-func (i *consistentIndex) setConsistentIndex(v uint64) { *i = consistentIndex(v) }
++func (i *consistentIndex) setConsistentIndex(v uint64) {
++	atomic.StoreUint64((*uint64)(i), v)
++}
+ 
+-func (i *consistentIndex) ConsistentIndex() uint64 { return uint64(*i) }
++func (i *consistentIndex) ConsistentIndex() uint64 {
++	return atomic.LoadUint64((*uint64)(i))
++}

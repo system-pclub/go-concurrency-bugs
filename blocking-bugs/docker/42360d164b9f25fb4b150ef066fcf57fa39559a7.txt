@@ -1,0 +1,22 @@
+commit 42360d164b9f25fb4b150ef066fcf57fa39559a7
+Author: Victor Vieux <vieux@docker.com>
+Date:   Wed Aug 3 16:22:12 2016 -0700
+
+    fix deadlock when more than 1 plugin is installed
+    
+    Signed-off-by: Victor Vieux <vieux@docker.com>
+
+diff --git a/plugin/manager.go b/plugin/manager.go
+index fae852b..aa7f5d6 100644
+--- a/plugin/manager.go
++++ b/plugin/manager.go
+@@ -326,8 +326,8 @@ func (pm *Manager) init() error {
+ 				}
+ 			}
+ 		}(p)
+-		group.Wait()
+ 	}
++	group.Wait()
+ 	return pm.save()
+ }
+ 

@@ -1,0 +1,29 @@
+commit b71aced4a2a1ee80a1cbbd26b85a57623790d7f4
+Author: lyuxuan <yuxuanli@google.com>
+Date:   Fri Jan 19 09:37:59 2018 -0800
+
+    transport: Fix a data race when headers are received while the stream is being closed (#1814)
+
+diff --git a/transport/http2_client.go b/transport/http2_client.go
+index b4495ae..9770906 100644
+--- a/transport/http2_client.go
++++ b/transport/http2_client.go
+@@ -1116,12 +1116,13 @@ func (t *http2Client) operateHeaders(frame *http2.MetaHeadersFrame) {
+ 	}()
+ 
+ 	s.mu.Lock()
+-	if !endStream {
+-		s.recvCompress = state.encoding
+-	}
+ 	if !s.headerDone {
+-		if !endStream && len(state.mdata) > 0 {
+-			s.header = state.mdata
++		// Headers frame is not actually a trailers-only frame.
++		if !endStream {
++			s.recvCompress = state.encoding
++			if len(state.mdata) > 0 {
++				s.header = state.mdata
++			}
+ 		}
+ 		close(s.headerChan)
+ 		s.headerDone = true

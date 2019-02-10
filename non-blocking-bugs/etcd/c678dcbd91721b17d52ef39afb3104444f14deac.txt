@@ -1,0 +1,64 @@
+commit c678dcbd91721b17d52ef39afb3104444f14deac
+Author: Iwasaki Yudai <yudai.iwasaki@ntti3.com>
+Date:   Tue Jun 27 13:42:56 2017 -0700
+
+    compactor: Fix data race in revision compactor test
+    
+    Use atomic functions to manipulate `rev` of `fakeRevGetter`
+    so that the tester goroutine can update the
+    value without race with the compactor's goroutine.
+
+diff --git a/compactor/compactor_test.go b/compactor/compactor_test.go
+index 5d806e9..c38ef4b 100644
+--- a/compactor/compactor_test.go
++++ b/compactor/compactor_test.go
+@@ -15,6 +15,8 @@
+ package compactor
+ 
+ import (
++	"sync/atomic"
++
+ 	pb "github.com/coreos/etcd/etcdserver/etcdserverpb"
+ 	"github.com/coreos/etcd/pkg/testutil"
+ 	"golang.org/x/net/context"
+@@ -36,6 +38,10 @@ type fakeRevGetter struct {
+ 
+ func (fr *fakeRevGetter) Rev() int64 {
+ 	fr.Record(testutil.Action{Name: "g"})
+-	fr.rev++
+-	return fr.rev
++	rev := atomic.AddInt64(&fr.rev, 1)
++	return rev
++}
++
++func (fr *fakeRevGetter) SetRev(rev int64) {
++	atomic.StoreInt64(&fr.rev, rev)
+ }
+diff --git a/compactor/revision_test.go b/compactor/revision_test.go
+index 3909839..766afae 100644
+--- a/compactor/revision_test.go
++++ b/compactor/revision_test.go
+@@ -42,7 +42,7 @@ func TestRevision(t *testing.T) {
+ 	rg.Wait(1)
+ 	// nothing happens
+ 
+-	rg.rev = 99 // will be 100
++	rg.SetRev(99) // will be 100
+ 	expectedRevision := int64(90)
+ 	fc.Advance(checkCompactionInterval)
+ 	rg.Wait(1)
+@@ -55,12 +55,12 @@ func TestRevision(t *testing.T) {
+ 	}
+ 
+ 	// skip the same revision
+-	rg.rev = 99 // will be 100
++	rg.SetRev(99) // will be 100
+ 	expectedRevision = int64(90)
+ 	rg.Wait(1)
+ 	// nothing happens
+ 
+-	rg.rev = 199 // will be 200
++	rg.SetRev(199) // will be 200
+ 	expectedRevision = int64(190)
+ 	fc.Advance(checkCompactionInterval)
+ 	rg.Wait(1)

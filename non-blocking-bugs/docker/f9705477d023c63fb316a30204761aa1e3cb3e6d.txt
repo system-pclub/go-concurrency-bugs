@@ -1,0 +1,33 @@
+commit f9705477d023c63fb316a30204761aa1e3cb3e6d
+Author: Shane Canon <scanon@lbl.gov>
+Date:   Sat May 31 10:20:07 2014 -0700
+
+    Fix for setuid race condition in LXC driver
+    
+    This is a fix for a race condition in the LXC driver.  This is described
+    more in issue #6092.
+    
+    Closes #6092
+    
+    Docker-DCO-1.1-Signed-off-by: Shane Canon <scanon@lbl.gov> (github: scanon)
+
+diff --git a/daemon/execdriver/lxc/driver.go b/daemon/execdriver/lxc/driver.go
+index 1df1d68..e1b4763 100644
+--- a/daemon/execdriver/lxc/driver.go
++++ b/daemon/execdriver/lxc/driver.go
+@@ -9,6 +9,7 @@ import (
+ 	"os/exec"
+ 	"path"
+ 	"path/filepath"
++	"runtime"
+ 	"strconv"
+ 	"strings"
+ 	"syscall"
+@@ -26,6 +27,7 @@ const DriverName = "lxc"
+ 
+ func init() {
+ 	execdriver.RegisterInitFunc(DriverName, func(args *execdriver.InitArgs) error {
++		runtime.LockOSThread()
+ 		if err := setupEnv(args); err != nil {
+ 			return err
+ 		}

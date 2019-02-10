@@ -1,0 +1,99 @@
+commit abfdaca3f86d7951693697fbd849078d6b406478
+Author: Paul Nasrat <pnasrat@gmail.com>
+Date:   Mon Nov 25 13:58:17 2013 -0500
+
+    Fix data race in TestLogEvent
+    
+    Found with -race. Improve locking on Server.
+
+diff --git a/api.go b/api.go
+index 1104b78..2880d0e 100644
+--- a/api.go
++++ b/api.go
+@@ -254,7 +254,7 @@ func getEvents(srv *Server, version float64, w http.ResponseWriter, r *http.Requ
+ 	wf.Flush()
+ 	if since != 0 {
+ 		// If since, send previous events that happened after the timestamp
+-		for _, event := range srv.events {
++		for _, event := range srv.GetEvents() {
+ 			if event.Time >= since {
+ 				err := sendEvent(wf, &event)
+ 				if err != nil && err.Error() == "JSON error" {
+diff --git a/server.go b/server.go
+index db1dce7..cddac7f 100644
+--- a/server.go
++++ b/server.go
+@@ -959,6 +959,8 @@ func (srv *Server) poolAdd(kind, key string) error {
+ }
+ 
+ func (srv *Server) poolRemove(kind, key string) error {
++	srv.Lock()
++	defer srv.Unlock()
+ 	switch kind {
+ 	case "pull":
+ 		delete(srv.pullingPool, key)
+@@ -1829,6 +1831,8 @@ func NewServer(eng *engine.Engine, config *DaemonConfig) (*Server, error) {
+ }
+ 
+ func (srv *Server) HTTPRequestFactory(metaHeaders map[string][]string) *utils.HTTPRequestFactory {
++	srv.Lock()
++	defer srv.Unlock()
+ 	if srv.reqFactory == nil {
+ 		ud := utils.NewHTTPUserAgentDecorator(srv.versionInfos()...)
+ 		md := &utils.HTTPMetaHeadersDecorator{
+@@ -1843,7 +1847,7 @@ func (srv *Server) HTTPRequestFactory(metaHeaders map[string][]string) *utils.HT
+ func (srv *Server) LogEvent(action, id, from string) *utils.JSONMessage {
+ 	now := time.Now().Unix()
+ 	jm := utils.JSONMessage{Status: action, ID: id, From: from, Time: now}
+-	srv.events = append(srv.events, jm)
++	srv.AddEvent(jm)
+ 	for _, c := range srv.listeners {
+ 		select { // non blocking channel
+ 		case c <- jm:
+@@ -1853,8 +1857,20 @@ func (srv *Server) LogEvent(action, id, from string) *utils.JSONMessage {
+ 	return &jm
+ }
+ 
++func (srv *Server) AddEvent(jm utils.JSONMessage) {
++	srv.Lock()
++	defer srv.Unlock()
++	srv.events = append(srv.events, jm)
++}
++
++func (srv *Server) GetEvents() []utils.JSONMessage {
++	srv.RLock()
++	defer srv.RUnlock()
++	return srv.events
++}
++
+ type Server struct {
+-	sync.Mutex
++	sync.RWMutex
+ 	runtime     *Runtime
+ 	pullingPool map[string]struct{}
+ 	pushingPool map[string]struct{}
+diff --git a/server_unit_test.go b/server_unit_test.go
+index a51e2dd..f4a8974 100644
+--- a/server_unit_test.go
++++ b/server_unit_test.go
+@@ -70,8 +70,9 @@ func TestLogEvent(t *testing.T) {
+ 
+ 	srv.LogEvent("fakeaction2", "fakeid", "fakeimage")
+ 
+-	if len(srv.events) != 2 {
+-		t.Fatalf("Expected 2 events, found %d", len(srv.events))
++	numEvents := len(srv.GetEvents())
++	if numEvents != 2 {
++		t.Fatalf("Expected 2 events, found %d", numEvents)
+ 	}
+ 	go func() {
+ 		time.Sleep(200 * time.Millisecond)
+@@ -83,7 +84,7 @@ func TestLogEvent(t *testing.T) {
+ 	setTimeout(t, "Listening for events timed out", 2*time.Second, func() {
+ 		for i := 2; i < 4; i++ {
+ 			event := <-listener
+-			if event != srv.events[i] {
++			if event != srv.GetEvents()[i] {
+ 				t.Fatalf("Event received it different than expected")
+ 			}
+ 		}

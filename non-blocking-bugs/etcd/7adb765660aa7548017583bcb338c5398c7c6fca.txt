@@ -1,0 +1,31 @@
+commit 7adb765660aa7548017583bcb338c5398c7c6fca
+Author: Xiang Li <xiang.li@coreos.com>
+Date:   Wed Jul 16 21:40:19 2014 -0700
+
+    etcd: fix datarace in peer.go
+
+diff --git a/etcd/peer.go b/etcd/peer.go
+index 058fb6a..f194fa4 100644
+--- a/etcd/peer.go
++++ b/etcd/peer.go
+@@ -48,6 +48,7 @@ func (p *peer) participate() {
+ 	p.queue = make(chan []byte)
+ 	p.status = participant
+ 	for i := 0; i < maxInflight; i++ {
++		p.wg.Add(1)
+ 		go p.handle(p.queue)
+ 	}
+ }
+@@ -72,11 +73,10 @@ func (p *peer) stop() {
+ }
+ 
+ func (p *peer) handle(queue chan []byte) {
+-	p.wg.Add(1)
++	defer p.wg.Done()
+ 	for d := range queue {
+ 		p.post(d)
+ 	}
+-	p.wg.Done()
+ }
+ 
+ func (p *peer) send(d []byte) error {

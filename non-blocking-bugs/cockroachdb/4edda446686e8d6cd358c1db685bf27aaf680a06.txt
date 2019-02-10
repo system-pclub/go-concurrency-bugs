@@ -1,0 +1,23 @@
+commit 4edda446686e8d6cd358c1db685bf27aaf680a06
+Author: Tobias Schottdorf <tobias.schottdorf@gmail.com>
+Date:   Mon Nov 13 11:58:34 2017 -0500
+
+    storage: avoid data race in destroyStatus
+    
+    Fixes #19962.
+
+diff --git a/pkg/storage/replica.go b/pkg/storage/replica.go
+index 04a9bc8..83e8f38 100644
+--- a/pkg/storage/replica.go
++++ b/pkg/storage/replica.go
+@@ -2989,8 +2989,9 @@ func (r *Replica) propose(
+ 
+ 	r.mu.Lock()
+ 	if !r.mu.destroyStatus.IsAlive() {
++		err := r.mu.destroyStatus.err
+ 		r.mu.Unlock()
+-		return nil, nil, noop, roachpb.NewError(r.mu.destroyStatus.err)
++		return nil, nil, noop, roachpb.NewError(err)
+ 	}
+ 	r.mu.Unlock()
+ 

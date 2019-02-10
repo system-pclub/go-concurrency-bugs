@@ -1,0 +1,20 @@
+commit 2e59635bea6a105581087bb93f68186f35cb0263
+Author: Xiang Li <xiang.li@coreos.com>
+Date:   Fri Jul 18 13:46:29 2014 -0700
+
+    etcd: fix a race in peer.go
+
+diff --git a/etcd/peer.go b/etcd/peer.go
+index a98c9f4..30bee9d 100644
+--- a/etcd/peer.go
++++ b/etcd/peer.go
+@@ -89,8 +89,8 @@ func (p *peer) send(d []byte) error {
+ 		if p.inflight.Get() > maxInflight {
+ 			return fmt.Errorf("reach max idle")
+ 		}
++		p.wg.Add(1)
+ 		go func() {
+-			p.wg.Add(1)
+ 			p.post(d)
+ 			p.wg.Done()
+ 		}()

@@ -1,0 +1,109 @@
+commit 03ea2166b66632ee7cdd824d7acd87b15c9bccb2
+Author: Alexandr Morozov <lk4d4@docker.com>
+Date:   Mon Nov 3 10:50:16 2014 -0800
+
+    Fix deadlock in ps exited filter
+    
+    Fixes #8909
+    
+    Signed-off-by: Alexandr Morozov <lk4d4@docker.com>
+
+diff --git a/daemon/list.go b/daemon/list.go
+index 347d3c2..29d7298 100644
+--- a/daemon/list.go
++++ b/daemon/list.go
+@@ -99,7 +99,7 @@ func (daemon *Daemon) Containers(job *engine.Job) engine.Status {
+ 		if len(filt_exited) > 0 && !container.Running {
+ 			should_skip := true
+ 			for _, code := range filt_exited {
+-				if code == container.GetExitCode() {
++				if code == container.ExitCode {
+ 					should_skip = false
+ 					break
+ 				}
+diff --git a/integration-cli/docker_cli_ps_test.go b/integration-cli/docker_cli_ps_test.go
+index 3874fa7..0920782 100644
+--- a/integration-cli/docker_cli_ps_test.go
++++ b/integration-cli/docker_cli_ps_test.go
+@@ -396,3 +396,81 @@ func TestPsListContainersFilterName(t *testing.T) {
+ 
+ 	logDone("ps - test ps filter name")
+ }
++
++func TestPsListContainersFilterExited(t *testing.T) {
++	deleteAllContainers()
++	defer deleteAllContainers()
++	runCmd := exec.Command(dockerBinary, "run", "--name", "zero1", "busybox", "true")
++	out, _, err := runCommandWithOutput(runCmd)
++	if err != nil {
++		t.Fatal(out, err)
++	}
++	firstZero, err := getIDByName("zero1")
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	runCmd = exec.Command(dockerBinary, "run", "--name", "zero2", "busybox", "true")
++	out, _, err = runCommandWithOutput(runCmd)
++	if err != nil {
++		t.Fatal(out, err)
++	}
++	secondZero, err := getIDByName("zero2")
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	runCmd = exec.Command(dockerBinary, "run", "--name", "nonzero1", "busybox", "false")
++	out, _, err = runCommandWithOutput(runCmd)
++	if err == nil {
++		t.Fatal("Should fail.", out, err)
++	}
++	firstNonZero, err := getIDByName("nonzero1")
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	runCmd = exec.Command(dockerBinary, "run", "--name", "nonzero2", "busybox", "false")
++	out, _, err = runCommandWithOutput(runCmd)
++	if err == nil {
++		t.Fatal("Should fail.", out, err)
++	}
++	secondNonZero, err := getIDByName("nonzero2")
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	// filter containers by exited=0
++	runCmd = exec.Command(dockerBinary, "ps", "-a", "-q", "--no-trunc", "--filter=exited=0")
++	out, _, err = runCommandWithOutput(runCmd)
++	if err != nil {
++		t.Fatal(out, err)
++	}
++	ids := strings.Split(strings.TrimSpace(out), "\n")
++	if len(ids) != 2 {
++		t.Fatalf("Should be 2 zero exited containerst got %d", len(ids))
++	}
++	if ids[0] != secondZero {
++		t.Fatalf("First in list should be %q, got %q", secondZero, ids[0])
++	}
++	if ids[1] != firstZero {
++		t.Fatalf("Second in list should be %q, got %q", firstZero, ids[1])
++	}
++
++	runCmd = exec.Command(dockerBinary, "ps", "-a", "-q", "--no-trunc", "--filter=exited=1")
++	out, _, err = runCommandWithOutput(runCmd)
++	if err != nil {
++		t.Fatal(out, err)
++	}
++	ids = strings.Split(strings.TrimSpace(out), "\n")
++	if len(ids) != 2 {
++		t.Fatalf("Should be 2 zero exited containerst got %d", len(ids))
++	}
++	if ids[0] != secondNonZero {
++		t.Fatalf("First in list should be %q, got %q", secondNonZero, ids[0])
++	}
++	if ids[1] != firstNonZero {
++		t.Fatalf("Second in list should be %q, got %q", firstNonZero, ids[1])
++	}
++	logDone("ps - test ps filter exited")
++}

@@ -1,0 +1,33 @@
+commit 8f6a14452dfd88aedc8ac9577a98c38a555baadc
+Author: Darren Shepherd <darren@rancher.com>
+Date:   Mon Mar 30 17:39:43 2015 -0700
+
+    Avoid ServeApi race condition
+    
+    If job "acceptconnections" is called before "serveapi" the API Accept()
+    method will hang forever waiting for activation.  This is due to the fact
+    that when "acceptconnections" ran the activation channel was nil.
+    
+    Signed-off-by: Darren Shepherd <darren@rancher.com>
+
+diff --git a/api/server/server.go b/api/server/server.go
+index a7d0a58..c1b89fc 100644
+--- a/api/server/server.go
++++ b/api/server/server.go
+@@ -39,7 +39,7 @@ import (
+ )
+ 
+ var (
+-	activationLock chan struct{}
++	activationLock chan struct{} = make(chan struct{})
+ )
+ 
+ type HttpServer struct {
+@@ -1593,7 +1593,6 @@ func ServeApi(job *engine.Job) error {
+ 		protoAddrs = job.Args
+ 		chErrors   = make(chan error, len(protoAddrs))
+ 	)
+-	activationLock = make(chan struct{})
+ 
+ 	for _, protoAddr := range protoAddrs {
+ 		protoAddrParts := strings.SplitN(protoAddr, "://", 2)

@@ -1,0 +1,55 @@
+commit 4e56696c6c5a8cd7b711a1eb8936463559361da5
+Author: Andrew Lytvynov <lytvynov.a.v@gmail.com>
+Date:   Fri Aug 4 13:40:50 2017 -0700
+
+    Fix a goroutine leak in DialContext (#1424)
+    
+    A leak happens when DialContext times out before a balancer returns any
+    addresses or before a successful connection is established.
+    
+    The loop in ClientConn.lbWatcher breaks and doneChan never gets closed.
+
+diff --git a/clientconn.go b/clientconn.go
+index 7363e51..19be007 100644
+--- a/clientconn.go
++++ b/clientconn.go
+@@ -611,6 +611,15 @@ func (cc *ClientConn) GetState() ConnectivityState {
+ // connections accordingly.  If doneChan is not nil, it is closed after the
+ // first successfull connection is made.
+ func (cc *ClientConn) lbWatcher(doneChan chan struct{}) {
++	defer func() {
++		// In case channel from cc.dopts.balancer.Notify() gets closed before a
++		// successful connection gets established, don't forget to notify the
++		// caller.
++		if doneChan != nil {
++			close(doneChan)
++		}
++	}()
++
+ 	for addrs := range cc.dopts.balancer.Notify() {
+ 		var (
+ 			add []Address   // Addresses need to setup connections.
+diff --git a/clientconn_test.go b/clientconn_test.go
+index 1d74747..11071ce 100644
+--- a/clientconn_test.go
++++ b/clientconn_test.go
+@@ -374,3 +374,19 @@ func TestClientUpdatesParamsAfterGoAway(t *testing.T) {
+ 		t.Fatalf("cc.dopts.copts.Keepalive.Time = %v , want 100ms", v)
+ 	}
+ }
++
++func TestClientLBWatcherWithClosedBalancer(t *testing.T) {
++	b := newBlockingBalancer()
++	cc := &ClientConn{dopts: dialOptions{balancer: b}}
++
++	doneChan := make(chan struct{})
++	go cc.lbWatcher(doneChan)
++	// Balancer closes before any successful connections.
++	b.Close()
++
++	select {
++	case <-doneChan:
++	case <-time.After(100 * time.Millisecond):
++		t.Fatal("lbWatcher with closed balancer didn't close doneChan after 100ms")
++	}
++}

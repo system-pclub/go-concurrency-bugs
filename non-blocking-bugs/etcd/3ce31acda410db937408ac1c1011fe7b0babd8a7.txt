@@ -1,0 +1,62 @@
+commit 3ce31acda410db937408ac1c1011fe7b0babd8a7
+Author: Anthony Romano <anthony.romano@coreos.com>
+Date:   Tue Apr 25 14:58:16 2017 -0700
+
+    v3client: wrap watch ctxs with blank ctx
+    
+    Printing the values in ctx.String() will data race if the value
+    is mutable and doesn't implement String(), which seems to be common.
+    Instead, just return a fixed string instead of computing it; v3client
+    watches don't need as much flexibility for creating separate strings,
+    so separate ctx strings probably aren't necessary at this point.
+    
+    Fixes #7811
+
+diff --git a/etcdserver/api/v3client/v3client.go b/etcdserver/api/v3client/v3client.go
+index f2799e5..cc4147d 100644
+--- a/etcdserver/api/v3client/v3client.go
++++ b/etcdserver/api/v3client/v3client.go
+@@ -15,13 +15,14 @@
+ package v3client
+ 
+ import (
+-	"context"
+ 	"time"
+ 
+ 	"github.com/coreos/etcd/clientv3"
+ 	"github.com/coreos/etcd/etcdserver"
+ 	"github.com/coreos/etcd/etcdserver/api/v3rpc"
+ 	"github.com/coreos/etcd/proxy/grpcproxy/adapter"
++
++	"golang.org/x/net/context"
+ )
+ 
+ // New creates a clientv3 client that wraps an in-process EtcdServer. Instead
+@@ -37,7 +38,7 @@ func New(s *etcdserver.EtcdServer) *clientv3.Client {
+ 	c.Lease = clientv3.NewLeaseFromLeaseClient(lc, time.Second)
+ 
+ 	wc := adapter.WatchServerToWatchClient(v3rpc.NewWatchServer(s))
+-	c.Watcher = clientv3.NewWatchFromWatchClient(wc)
++	c.Watcher = &watchWrapper{clientv3.NewWatchFromWatchClient(wc)}
+ 
+ 	mc := adapter.MaintenanceServerToMaintenanceClient(v3rpc.NewMaintenanceServer(s))
+ 	c.Maintenance = clientv3.NewMaintenanceFromMaintenanceClient(mc)
+@@ -49,3 +50,18 @@ func New(s *etcdserver.EtcdServer) *clientv3.Client {
+ 
+ 	return c
+ }
++
++// BlankContext implements Stringer on a context so the ctx string doesn't
++// depend on the context's WithValue data, which tends to be unsynchronized
++// (e.g., x/net/trace), causing ctx.String() to throw data races.
++type blankContext struct{ context.Context }
++
++func (*blankContext) String() string { return "(blankCtx)" }
++
++// watchWrapper wraps clientv3 watch calls to blank out the context
++// to avoid races on trace data.
++type watchWrapper struct{ clientv3.Watcher }
++
++func (ww *watchWrapper) Watch(ctx context.Context, key string, opts ...clientv3.OpOption) clientv3.WatchChan {
++	return ww.Watcher.Watch(&blankContext{ctx}, key, opts...)
++}

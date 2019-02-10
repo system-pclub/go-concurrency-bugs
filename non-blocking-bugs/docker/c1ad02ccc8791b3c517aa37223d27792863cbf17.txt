@@ -1,0 +1,28 @@
+commit c1ad02ccc8791b3c517aa37223d27792863cbf17
+Author: Samuel Karp <skarp@amazon.com>
+Date:   Wed May 25 11:50:22 2016 -0700
+
+    awslogs: Fix a race in mockcwlogsclient
+    
+    Signed-off-by: Samuel Karp <skarp@amazon.com>
+
+diff --git a/daemon/logger/awslogs/cwlogsiface_mock_test.go b/daemon/logger/awslogs/cwlogsiface_mock_test.go
+index 56f7100..b768a3d 100644
+--- a/daemon/logger/awslogs/cwlogsiface_mock_test.go
++++ b/daemon/logger/awslogs/cwlogsiface_mock_test.go
+@@ -44,7 +44,14 @@ func (m *mockcwlogsclient) CreateLogStream(input *cloudwatchlogs.CreateLogStream
+ }
+ 
+ func (m *mockcwlogsclient) PutLogEvents(input *cloudwatchlogs.PutLogEventsInput) (*cloudwatchlogs.PutLogEventsOutput, error) {
+-	m.putLogEventsArgument <- input
++	events := make([]*cloudwatchlogs.InputLogEvent, len(input.LogEvents))
++	copy(events, input.LogEvents)
++	m.putLogEventsArgument <- &cloudwatchlogs.PutLogEventsInput{
++		LogEvents:     events,
++		SequenceToken: input.SequenceToken,
++		LogGroupName:  input.LogGroupName,
++		LogStreamName: input.LogStreamName,
++	}
+ 	output := <-m.putLogEventsResult
+ 	return output.successResult, output.errorResult
+ }

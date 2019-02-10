@@ -1,0 +1,35 @@
+commit 38dfe4326de2a1c4d2881f227b94923017d95ce7
+Author: Tobias Schottdorf <tobias.schottdorf@gmail.com>
+Date:   Thu Apr 16 10:07:14 2015 -0400
+
+    fix boring data race
+    
+    from https://circleci.com/gh/tschottdorf/cockroach/531
+    switching the lines stops first, then sets the nil.
+    
+    WARNING: DATA RACE
+    Write by goroutine 54:
+      github.com/cockroachdb/cockroach/storage.funcÂ·052()
+          /go/src/github.com/cockroachdb/cockroach/storage/range_test.go:759 +0x38
+      github.com/cockroachdb/cockroach/storage.TestRangeCommandQueueInconsistent()
+          /go/src/github.com/cockroachdb/cockroach/storage/range_test.go:808 +0x734
+      testing.tRunner()
+          /usr/src/go/src/testing/testing.go:447 +0x133
+    
+    Previous read by goroutine 56:
+      github.com/cockroachdb/cockroach/storage.(*Range).executeCmd()
+
+diff --git a/storage/range_test.go b/storage/range_test.go
+index e3a47b7..59c736d 100644
+--- a/storage/range_test.go
++++ b/storage/range_test.go
+@@ -755,8 +755,8 @@ func TestRangeCommandQueueInconsistent(t *testing.T) {
+ 	defer leaktest.AfterTest(t)
+ 	tc := testContext{}
+ 	tc.Start(t)
+-	defer tc.Stop()
+ 	defer func() { TestingCommandFilter = nil }()
++	defer tc.Stop()
+ 
+ 	key := proto.Key("key1")
+ 	blockingDone := make(chan struct{})

@@ -1,0 +1,19 @@
+commit de89a847175062dbc12e274b19623193cd69685b
+Author: Tamir Duberstein <tamird@gmail.com>
+Date:   Wed Apr 20 13:49:48 2016 -0400
+
+    kv: fix deadlock when running with --verbosity=2
+
+diff --git a/kv/range_cache.go b/kv/range_cache.go
+index dd45199..658116b 100644
+--- a/kv/range_cache.go
++++ b/kv/range_cache.go
+@@ -292,7 +292,7 @@ func (rdc *rangeDescriptorCache) LookupRangeDescriptor(
+ 	}
+ 
+ 	if log.V(2) {
+-		log.Infof("lookup range descriptor: key=%s\n%s", key, rdc)
++		log.Infof("lookup range descriptor: key=%s\n%s", key, rdc.stringLocked())
+ 	} else if log.V(1) {
+ 		log.Infof("lookup range descriptor: key=%s", key)
+ 	}

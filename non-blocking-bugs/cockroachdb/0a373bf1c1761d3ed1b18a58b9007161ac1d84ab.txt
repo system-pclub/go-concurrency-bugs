@@ -1,0 +1,67 @@
+commit 0a373bf1c1761d3ed1b18a58b9007161ac1d84ab
+Author: Peter Mattis <petermattis@gmail.com>
+Date:   Mon Jul 11 08:33:30 2016 -0400
+
+    kv: avoid data race in TxnCoordSender.tryAsyncAbort
+    
+    Fixes #7726.
+
+diff --git a/kv/txn_coord_sender.go b/kv/txn_coord_sender.go
+index 84eb41c..bb76c36 100644
+--- a/kv/txn_coord_sender.go
++++ b/kv/txn_coord_sender.go
+@@ -626,7 +626,8 @@ func (tc *TxnCoordSender) heartbeatLoop(ctx context.Context, txnID uuid.UUID) {
+ func (tc *TxnCoordSender) tryAsyncAbort(txnID uuid.UUID) {
+ 	tc.Lock()
+ 	txnMeta := tc.txns[txnID]
+-	// Grab the intents and clone the txn to avoid data races.
++	// Clone the intents and the txn to avoid data races.
++	txnMeta.keys = append([]roachpb.Span(nil), txnMeta.keys...)
+ 	roachpb.MergeSpans(&txnMeta.keys)
+ 	intentSpans := txnMeta.keys
+ 	txnMeta.keys = nil
+diff --git a/kv/txn_coord_sender_test.go b/kv/txn_coord_sender_test.go
+index 3b757bf..d433f1d 100644
+--- a/kv/txn_coord_sender_test.go
++++ b/kv/txn_coord_sender_test.go
+@@ -566,6 +566,40 @@ func TestTxnCoordSenderCleanupOnAborted(t *testing.T) {
+ 	verifyCleanup(key, sender, s.Eng, t)
+ }
+ 
++func TestTxnCoordSenderCancel(t *testing.T) {
++	defer leaktest.AfterTest(t)()
++	s, sender := createTestDB(t)
++	defer s.Stop()
++
++	ctx, cancel := context.WithCancel(context.Background())
++
++	origSender := sender.wrapped
++	sender.wrapped = client.SenderFunc(
++		func(ctx context.Context, args roachpb.BatchRequest) (*roachpb.BatchResponse, *roachpb.Error) {
++			if _, hasET := args.GetArg(roachpb.EndTransaction); hasET {
++				// Cancel the transaction while also sending it along. This tickled a
++				// data race in TxnCoordSender.tryAsyncAbort. See #7726.
++				cancel()
++			}
++			return origSender.Send(ctx, args)
++		})
++
++	// Create a transaction with bunch of intents.
++	txn := client.NewTxn(ctx, *s.DB)
++	batch := txn.NewBatch()
++	for i := 0; i < 100; i++ {
++		key := roachpb.Key(fmt.Sprintf("%d", i))
++		batch.Put(key, []byte("value"))
++	}
++	if err := txn.Run(batch); err != nil {
++		t.Fatal(err)
++	}
++
++	// Commit the transaction. Note that we cancel the transaction when the
++	// commit is sent which stresses the TxnCoordSender.tryAsyncAbort code path.
++	_ = txn.CommitOrCleanup()
++}
++
+ // TestTxnCoordSenderGCTimeout verifies that the coordinator cleans up extant
+ // transactions and intents after the lastUpdateNanos exceeds the timeout.
+ func TestTxnCoordSenderGCTimeout(t *testing.T) {

@@ -1,0 +1,54 @@
+commit 82afb7ab1fe12cf2efceede2322d082eaf5d5adc
+Author: Andy Goldstein <agoldste@redhat.com>
+Date:   Thu Apr 9 16:30:47 2015 +0000
+
+    bump(github.com/docker/spdystream):99515db39d3dad9607e0293f18152f3d59da76dc
+    
+    Update spdystream to pick up a fix for a deadlock between writing data
+    and a connection closure.
+    
+    Fixes #6490
+
+diff --git a/Godeps/Godeps.json b/Godeps/Godeps.json
+index 8bbf86a..af45575 100644
+--- a/Godeps/Godeps.json
++++ b/Godeps/Godeps.json
+@@ -162,7 +162,7 @@
+ 		},
+ 		{
+ 			"ImportPath": "github.com/docker/spdystream",
+-			"Rev": "e731c8f9f19ffd7e51a469a2de1580c1dfbb4fae"
++			"Rev": "99515db39d3dad9607e0293f18152f3d59da76dc"
+ 		},
+ 		{
+ 			"ImportPath": "github.com/elazarl/go-bindata-assetfs",
+diff --git a/Godeps/_workspace/src/github.com/docker/spdystream/connection.go b/Godeps/_workspace/src/github.com/docker/spdystream/connection.go
+index 846b934..6e623c4 100644
+--- a/Godeps/_workspace/src/github.com/docker/spdystream/connection.go
++++ b/Godeps/_workspace/src/github.com/docker/spdystream/connection.go
+@@ -89,10 +89,25 @@ Loop:
+ 			if timer != nil {
+ 				timer.Stop()
+ 			}
++
++			// Start a goroutine to drain resetChan. This is needed because we've seen
++			// some unit tests with large numbers of goroutines get into a situation
++			// where resetChan fills up, at least 1 call to Write() is still trying to
++			// send to resetChan, the connection gets closed, and this case statement
++			// attempts to grab the write lock that Write() already has, causing a
++			// deadlock.
++			//
++			// See https://github.com/docker/spdystream/issues/49 for more details.
++			go func() {
++				for _ = range resetChan {
++				}
++			}()
++
+ 			i.writeLock.Lock()
+ 			close(resetChan)
+ 			i.resetChan = nil
+ 			i.writeLock.Unlock()
++
+ 			break Loop
+ 		}
+ 	}

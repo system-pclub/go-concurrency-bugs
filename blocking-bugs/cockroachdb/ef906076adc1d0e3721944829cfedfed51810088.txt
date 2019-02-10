@@ -1,0 +1,25 @@
+commit ef906076adc1d0e3721944829cfedfed51810088
+Author: Peter Mattis <petermattis@gmail.com>
+Date:   Thu Feb 23 12:35:15 2017 -0500
+
+    sql: deflake TestSchemaChangeReverseMutations
+    
+    Need to call sql.Rows.Close to avoid a goroutine leak in go1.8. NB:
+    sql.Rows are automatically closed when Rows.Next returns false.
+    
+    See #13753
+
+diff --git a/pkg/sql/schema_changer_test.go b/pkg/sql/schema_changer_test.go
+index 99c8733..3a36bd0 100644
+--- a/pkg/sql/schema_changer_test.go
++++ b/pkg/sql/schema_changer_test.go
+@@ -1476,6 +1476,9 @@ CREATE TABLE t.test (k INT PRIMARY KEY, v INT);
+ 
+ 		// Ensure that sql is using the correct table lease.
+ 		if len(cols) != len(expectedCols) {
++			if err := rows.Close(); err != nil {
++				t.Fatal(err)
++			}
+ 			return errors.Errorf("incorrect columns: %v, expected: %v", cols, expectedCols)
+ 		}
+ 		if cols[0] != expectedCols[0] || cols[1] != expectedCols[1] {

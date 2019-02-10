@@ -1,0 +1,56 @@
+commit 647b826d697abdc50aa4808fa21604c9f6fe80a4
+Author: nikhiljindal <nikhiljindal@google.com>
+Date:   Mon Nov 7 09:37:19 2016 -0800
+
+    Fix a data race condition in federation namespace controller
+
+diff --git a/federation/pkg/federation-controller/namespace/BUILD b/federation/pkg/federation-controller/namespace/BUILD
+index b47975c..78f2435 100644
+--- a/federation/pkg/federation-controller/namespace/BUILD
++++ b/federation/pkg/federation-controller/namespace/BUILD
+@@ -27,6 +27,7 @@ go_library(
+         "//pkg/client/clientset_generated/release_1_5:go_default_library",
+         "//pkg/client/record:go_default_library",
+         "//pkg/controller:go_default_library",
++        "//pkg/conversion:go_default_library",
+         "//pkg/runtime:go_default_library",
+         "//pkg/util/flowcontrol:go_default_library",
+         "//pkg/watch:go_default_library",
+diff --git a/federation/pkg/federation-controller/namespace/namespace_controller.go b/federation/pkg/federation-controller/namespace/namespace_controller.go
+index c80b6dd..5347d3c 100644
+--- a/federation/pkg/federation-controller/namespace/namespace_controller.go
++++ b/federation/pkg/federation-controller/namespace/namespace_controller.go
+@@ -32,6 +32,7 @@ import (
+ 	kubeclientset "k8s.io/kubernetes/pkg/client/clientset_generated/release_1_5"
+ 	"k8s.io/kubernetes/pkg/client/record"
+ 	"k8s.io/kubernetes/pkg/controller"
++	"k8s.io/kubernetes/pkg/conversion"
+ 	"k8s.io/kubernetes/pkg/runtime"
+ 	"k8s.io/kubernetes/pkg/util/flowcontrol"
+ 	"k8s.io/kubernetes/pkg/watch"
+@@ -328,7 +329,7 @@ func (nc *NamespaceController) reconcileNamespace(namespace string) {
+ 		return
+ 	}
+ 
+-	baseNamespaceObj, exist, err := nc.namespaceInformerStore.GetByKey(namespace)
++	namespaceObjFromStore, exist, err := nc.namespaceInformerStore.GetByKey(namespace)
+ 	if err != nil {
+ 		glog.Errorf("Failed to query main namespace store for %v: %v", namespace, err)
+ 		nc.deliverNamespace(namespace, 0, true)
+@@ -339,7 +340,15 @@ func (nc *NamespaceController) reconcileNamespace(namespace string) {
+ 		// Not federated namespace, ignoring.
+ 		return
+ 	}
+-	baseNamespace := baseNamespaceObj.(*api_v1.Namespace)
++	// Create a copy before modifying the namespace to prevent race condition with
++	// other readers of namespace from store.
++	namespaceObj, err := conversion.NewCloner().DeepCopy(namespaceObjFromStore)
++	baseNamespace, ok := namespaceObj.(*api_v1.Namespace)
++	if err != nil || !ok {
++		glog.Errorf("Error in retrieving obj from store: %v, %v", ok, err)
++		nc.deliverNamespace(namespace, 0, true)
++		return
++	}
+ 	if baseNamespace.DeletionTimestamp != nil {
+ 		if err := nc.delete(baseNamespace); err != nil {
+ 			glog.Errorf("Failed to delete %s: %v", namespace, err)

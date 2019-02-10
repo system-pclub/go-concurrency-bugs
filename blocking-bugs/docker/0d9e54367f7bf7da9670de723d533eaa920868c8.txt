@@ -1,0 +1,19 @@
+commit 0d9e54367f7bf7da9670de723d533eaa920868c8
+Author: Guillaume J. Charmes <guillaume.charmes@dotcloud.com>
+Date:   Tue Apr 9 12:06:01 2013 -0700
+
+    Fix deadlock on stop failure
+
+diff --git a/container.go b/container.go
+index a7a4de5..e5b2d0a 100644
+--- a/container.go
++++ b/container.go
+@@ -579,7 +579,7 @@ func (container *Container) Stop() error {
+ 	// 2. Wait for the process to exit on its own
+ 	if err := container.WaitTimeout(10 * time.Second); err != nil {
+ 		log.Printf("Container %v failed to exit within 10 seconds of SIGTERM - using the force", container.Id)
+-		if err := container.Kill(); err != nil {
++		if err := container.kill(); err != nil {
+ 			return err
+ 		}
+ 	}

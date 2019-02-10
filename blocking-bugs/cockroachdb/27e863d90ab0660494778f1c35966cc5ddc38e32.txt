@@ -1,0 +1,206 @@
+commit 27e863d90ab0660494778f1c35966cc5ddc38e32
+Author: Arjun Narayan <arjun@cockroachlabs.com>
+Date:   Thu Oct 27 16:53:15 2016 -0400
+
+    storage: fix deadlock in coalesced heartbeats.
+    
+    The Replica.ReportUnreachable() code path held r.raftMu, and was
+    called by the heartbeat coalescing goroutine, which held
+    r.coalescedMu, a lock ordering violation. If r.raftMu was deadlocked,
+    this held up all heartbeat traffic. Change reporting unreachable
+    remote replicas to add to a per-Replica slice of unreachable remotes,
+    and have the actual reporting happen on Replica.tick(). Closes #10206.
+
+diff --git a/pkg/storage/client_raft_test.go b/pkg/storage/client_raft_test.go
+index af75621..026e50d 100644
+--- a/pkg/storage/client_raft_test.go
++++ b/pkg/storage/client_raft_test.go
+@@ -1450,6 +1450,60 @@ func TestRaftHeartbeats(t *testing.T) {
+ 	}
+ }
+ 
++// TestReportUnreachableHeartbeats tests that if a single transport fails,
++// coalesced heartbeats are not stalled out entirely.
++func TestReportUnreachableHeartbeats(t *testing.T) {
++	defer leaktest.AfterTest(t)()
++
++	mtc := startMultiTestContext(t, 3)
++	defer mtc.Stop()
++
++	// Replicate the range onto all three stores
++	mtc.replicateRange(1, 1, 2)
++
++	// Send a single increment to ensure the range is up.
++	key := roachpb.Key("a")
++	incArgs := incrementArgs(key, 2)
++	if _, err := client.SendWrapped(context.Background(),
++		mtc.distSenders[0], &incArgs); err != nil {
++		t.Fatal(err)
++	}
++	mtc.waitForValues(key, []int64{2, 2, 2})
++
++	leaderIdx := -1
++	for i, store := range mtc.stores {
++		if store.RaftStatus(1).SoftState.RaftState == raft.StateLeader {
++			leaderIdx = i
++			break
++		}
++	}
++	initialTerm := mtc.stores[leaderIdx].RaftStatus(1).Term
++	// Choose a follower index that is guaranteed to not be the leader
++	followerIdx := len(mtc.stores) + 1 - leaderIdx
++
++	// Shut down a raft transport via the circuit breaker, and wait for two
++	// election timeouts to trigger an election if reportUnreachable broke
++	// heartbeat transmission to the other store.
++	cb := mtc.transports[0].GetCircuitBreaker(roachpb.NodeID(followerIdx))
++	cb.Break()
++
++	ticksToWait := 2 * mtc.makeStoreConfig(0).RaftElectionTimeoutTicks
++	ticks := mtc.stores[leaderIdx].Metrics().RaftTicks.Count
++	for targetTicks := ticks() + int64(ticksToWait); ticks() < targetTicks; {
++		time.Sleep(time.Millisecond)
++	}
++
++	// Ensure that the leadership has not changed, to confirm that heartbeats
++	// are sent to the store with a functioning transport.
++	status := mtc.stores[leaderIdx].RaftStatus(1)
++	if status.SoftState.RaftState != raft.StateLeader {
++		t.Errorf("expected node %d to be leader after sleeping but was %s", leaderIdx, status.SoftState.RaftState)
++	}
++	if status.Term != initialTerm {
++		t.Errorf("while sleeping, term changed from %d to %d", initialTerm, status.Term)
++	}
++}
++
+ // TestReplicateAfterSplit verifies that a new replica whose start key
+ // is not KeyMin replicating to a fresh store can apply snapshots correctly.
+ func TestReplicateAfterSplit(t *testing.T) {
+diff --git a/pkg/storage/replica.go b/pkg/storage/replica.go
+index 8cbe0cf..134b4b6 100644
+--- a/pkg/storage/replica.go
++++ b/pkg/storage/replica.go
+@@ -374,6 +374,11 @@ type Replica struct {
+ 		// The pending outgoing snapshot if there is one.
+ 		outSnap OutgoingSnapshot
+ 	}
++
++	unreachablesMu struct {
++		syncutil.Mutex
++		remotes map[roachpb.ReplicaID]struct{}
++	}
+ }
+ 
+ // KeyRange is an interface type for the replicasByKey BTree, to compare
+@@ -2198,6 +2203,15 @@ func (r *Replica) tickRaftMuLocked() (bool, error) {
+ 	r.mu.Lock()
+ 	defer r.mu.Unlock()
+ 
++	r.unreachablesMu.Lock()
++	remotes := r.unreachablesMu.remotes
++	r.unreachablesMu.remotes = nil
++	r.unreachablesMu.Unlock()
++
++	for remoteReplica := range remotes {
++		r.mu.internalRaftGroup.ReportUnreachable(uint64(remoteReplica))
++	}
++
+ 	// If the raft group is uninitialized, do not initialize raft groups on
+ 	// tick.
+ 	if r.mu.internalRaftGroup == nil {
+@@ -2659,12 +2673,15 @@ func (r *Replica) sendRaftMessage(ctx context.Context, msg raftpb.Message) {
+ 	}
+ }
+ 
+-// reportUnreachable reports the remote replica as unreachable to the internal
+-// raft group.
+-func (r *Replica) reportUnreachable(remoteReplica roachpb.ReplicaID) {
+-	r.raftMu.Lock()
+-	defer r.raftMu.Unlock()
+-	r.mu.internalRaftGroup.ReportUnreachable(uint64(remoteReplica))
++// addUnreachableRemoteReplica adds the given remote ReplicaID to be reported
++// as unreachable on the next tick.
++func (r *Replica) addUnreachableRemoteReplica(remoteReplica roachpb.ReplicaID) {
++	r.unreachablesMu.Lock()
++	if r.unreachablesMu.remotes == nil {
++		r.unreachablesMu.remotes = make(map[roachpb.ReplicaID]struct{})
++	}
++	r.unreachablesMu.remotes[remoteReplica] = struct{}{}
++	r.unreachablesMu.Unlock()
+ }
+ 
+ // sendRaftMessageRequest sends a raft message, returning false if the message
+diff --git a/pkg/storage/store.go b/pkg/storage/store.go
+index 2ea3ab1..8708932 100644
+--- a/pkg/storage/store.go
++++ b/pkg/storage/store.go
+@@ -365,11 +365,11 @@ type Store struct {
+ 	drainLeases atomic.Value
+ 
+ 	// Locking notes: To avoid deadlocks, the following lock order must be
+-	// obeyed: Replica.raftMu < < Replica.readOnlyCmdMu < Store.mu.Mutex <
+-	// Replica.mu.Mutex < Store.scheduler.mu. (It is not required to acquire
+-	// every lock in sequence, but when multiple locks are held at the same time,
+-	// it is incorrect to acquire a lock with "lesser" value in this sequence
+-	// after one with "greater" value)
++	// obeyed: Replica.raftMu < Replica.readOnlyCmdMu < Store.mu < Replica.mu
++	// < Replica.unreachablesMu < Store.coalescedMu < Store.scheduler.mu.
++	// (It is not required to acquire every lock in sequence, but when multiple
++	// locks are held at the same time, it is incorrect to acquire a lock with
++	// "lesser" value in this sequence after one with "greater" value).
+ 	//
+ 	// Methods of Store with a "Locked" suffix require that
+ 	// Store.mu.Mutex be held. Other locking requirements are indicated
+@@ -3246,24 +3246,16 @@ func (s *Store) sendQueuedHeartbeatsToNode(beats, resps []RaftHeartbeat, to roac
+ 	}
+ 
+ 	if !s.cfg.Transport.SendAsync(chReq) {
+-		toReport := make(map[*Replica][]roachpb.ReplicaID)
+-
+ 		s.mu.Lock()
+ 		for _, beat := range beats {
+ 			replica := s.mu.replicas[beat.RangeID]
+-			toReport[replica] = append(toReport[replica], beat.ToReplicaID)
++			replica.addUnreachableRemoteReplica(beat.ToReplicaID)
+ 		}
+ 		for _, resp := range resps {
+ 			replica := s.mu.replicas[resp.RangeID]
+-			toReport[replica] = append(toReport[replica], resp.ToReplicaID)
++			replica.addUnreachableRemoteReplica(resp.ToReplicaID)
+ 		}
+ 		s.mu.Unlock()
+-
+-		for replica, beats := range toReport {
+-			for _, to := range beats {
+-				replica.reportUnreachable(to)
+-			}
+-		}
+ 		return 0
+ 	}
+ 	return len(beats) + len(resps)
+@@ -3271,18 +3263,20 @@ func (s *Store) sendQueuedHeartbeatsToNode(beats, resps []RaftHeartbeat, to roac
+ 
+ func (s *Store) sendQueuedHeartbeats() {
+ 	s.coalescedMu.Lock()
+-	defer s.coalescedMu.Unlock()
++	heartbeats := s.coalescedMu.heartbeats
++	heartbeatResponses := s.coalescedMu.heartbeatResponses
++	s.coalescedMu.heartbeats = map[roachpb.StoreIdent][]RaftHeartbeat{}
++	s.coalescedMu.heartbeatResponses = map[roachpb.StoreIdent][]RaftHeartbeat{}
++	s.coalescedMu.Unlock()
+ 
+ 	var beatsSent int
+ 
+-	for to, beats := range s.coalescedMu.heartbeats {
++	for to, beats := range heartbeats {
+ 		beatsSent += s.sendQueuedHeartbeatsToNode(beats, nil, to)
+ 	}
+-	for to, resps := range s.coalescedMu.heartbeatResponses {
++	for to, resps := range heartbeatResponses {
+ 		beatsSent += s.sendQueuedHeartbeatsToNode(nil, resps, to)
+ 	}
+-	s.coalescedMu.heartbeats = map[roachpb.StoreIdent][]RaftHeartbeat{}
+-	s.coalescedMu.heartbeatResponses = map[roachpb.StoreIdent][]RaftHeartbeat{}
+ 	s.metrics.RaftCoalescedHeartbeatsPending.Update(int64(beatsSent))
+ }
+ 

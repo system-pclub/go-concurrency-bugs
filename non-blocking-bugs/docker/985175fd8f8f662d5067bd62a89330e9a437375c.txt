@@ -1,0 +1,95 @@
+commit 985175fd8f8f662d5067bd62a89330e9a437375c
+Author: Brian Goff <cpuguy83@gmail.com>
+Date:   Tue Nov 24 11:52:18 2015 -0500
+
+    Fix race in locker call to `dec()`
+    
+    Can't safely use uint32 for locker since we need to decrement the count,
+    which requires loading the unit and doing some math, which is inherintly
+    racey.
+    Instead use Int32 which we can safely use with atomic and AddInt32 with
+    `-1`
+    
+    Signed-off-by: Brian Goff <cpuguy83@gmail.com>
+
+diff --git a/pkg/locker/locker.go b/pkg/locker/locker.go
+index 89d6ba2..e4984ba 100644
+--- a/pkg/locker/locker.go
++++ b/pkg/locker/locker.go
+@@ -32,22 +32,23 @@ type Locker struct {
+ type lockCtr struct {
+ 	mu sync.Mutex
+ 	// waiters is the number of waiters waiting to acquire the lock
+-	waiters uint32
++	// this is int32 instead of uint32 so we can add `-1` in `dec()`
++	waiters int32
+ }
+ 
+ // inc increments the number of waiters waiting for the lock
+ func (l *lockCtr) inc() {
+-	atomic.AddUint32(&l.waiters, 1)
++	atomic.AddInt32(&l.waiters, 1)
+ }
+ 
+ // dec decrements the number of waiters wating on the lock
+ func (l *lockCtr) dec() {
+-	atomic.AddUint32(&l.waiters, ^uint32(l.waiters-1))
++	atomic.AddInt32(&l.waiters, -1)
+ }
+ 
+ // count gets the current number of waiters
+-func (l *lockCtr) count() uint32 {
+-	return atomic.LoadUint32(&l.waiters)
++func (l *lockCtr) count() int32 {
++	return atomic.LoadInt32(&l.waiters)
+ }
+ 
+ // Lock locks the mutex
+diff --git a/pkg/locker/locker_test.go b/pkg/locker/locker_test.go
+index 631aaf3..5a297dd 100644
+--- a/pkg/locker/locker_test.go
++++ b/pkg/locker/locker_test.go
+@@ -1,6 +1,7 @@
+ package locker
+ 
+ import (
++	"sync"
+ 	"testing"
+ 	"time"
+ )
+@@ -89,3 +90,35 @@ func TestLockerUnlock(t *testing.T) {
+ 		t.Fatalf("lock should not be blocked")
+ 	}
+ }
++
++func TestLockerConcurrency(t *testing.T) {
++	l := New()
++
++	var wg sync.WaitGroup
++	for i := 0; i <= 10000; i++ {
++		wg.Add(1)
++		go func() {
++			l.Lock("test")
++			// if there is a concurrency issue, will very likely panic here
++			l.Unlock("test")
++			wg.Done()
++		}()
++	}
++
++	chDone := make(chan struct{})
++	go func() {
++		wg.Wait()
++		close(chDone)
++	}()
++
++	select {
++	case <-chDone:
++	case <-time.After(10 * time.Second):
++		t.Fatal("timeout waiting for locks to complete")
++	}
++
++	// Since everything has unlocked this should not exist anymore
++	if ctr, exists := l.locks["test"]; exists {
++		t.Fatalf("lock should not exist: %v", ctr)
++	}
++}

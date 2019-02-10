@@ -1,0 +1,79 @@
+commit d5a604c99d9e9741f7f2242de204abde1b47c2d9
+Author: Nikhil Benesch <nikhil.benesch@gmail.com>
+Date:   Wed Jul 19 15:22:47 2017 -0400
+
+    sqlccl: fix data race while checkpointing backup
+    
+    Fixes #17112.
+
+diff --git a/pkg/ccl/sqlccl/backup.go b/pkg/ccl/sqlccl/backup.go
+index fadc683..10a5d22 100644
+--- a/pkg/ccl/sqlccl/backup.go
++++ b/pkg/ccl/sqlccl/backup.go
+@@ -48,11 +48,12 @@ const (
+ 	BackupDescriptorCheckpointName = "BACKUP-CHECKPOINT"
+ 	// BackupFormatInitialVersion is the first version of backup and its files.
+ 	BackupFormatInitialVersion uint32 = 0
+-	// backupCheckpointInterval is the interval at which backup progress is saved
+-	// to durable storage.
+-	backupCheckpointInterval = time.Minute
+ )
+ 
++// BackupCheckpointInterval is the interval at which backup progress is saved
++// to durable storage.
++var BackupCheckpointInterval = time.Minute
++
+ // exportStorageFromURI returns an ExportStorage for the given URI.
+ func exportStorageFromURI(ctx context.Context, uri string) (storageccl.ExportStorage, error) {
+ 	conf, err := storageccl.ExportStorageConfFromURI(uri)
+@@ -467,11 +468,12 @@ func Backup(
+ 				})
+ 				mu.exported.Add(file.Exported)
+ 			}
+-			doCheckpoint := timeutil.Since(mu.lastCheckpoint) > backupCheckpointInterval
+-			if doCheckpoint {
++			var checkpointFiles backupFileDescriptors
++			if timeutil.Since(mu.lastCheckpoint) > BackupCheckpointInterval {
+ 				// We optimistically assume the checkpoint will succeed to prevent
+ 				// multiple threads from attempting to checkpoint.
+ 				mu.lastCheckpoint = timeutil.Now()
++				checkpointFiles = append(checkpointFiles, mu.files...)
+ 			}
+ 			mu.Unlock()
+ 
+@@ -482,9 +484,9 @@ func Backup(
+ 					jobLogger.JobID(), jobLogger.Job.Description, err)
+ 			}
+ 
+-			if doCheckpoint {
++			if checkpointFiles != nil {
+ 				desc.Lock()
+-				desc.Files = append(backupFileDescriptors(nil), mu.files...)
++				desc.Files = checkpointFiles
+ 				if err := writeBackupDescriptor(
+ 					ctx, exportStore, BackupDescriptorCheckpointName, &desc.BackupDescriptor,
+ 				); err != nil {
+diff --git a/pkg/ccl/sqlccl/backup_test.go b/pkg/ccl/sqlccl/backup_test.go
+index 1f1d53c..f4010a3 100644
+--- a/pkg/ccl/sqlccl/backup_test.go
++++ b/pkg/ccl/sqlccl/backup_test.go
+@@ -25,6 +25,7 @@ import (
+ 	"strings"
+ 	"sync/atomic"
+ 	"testing"
++	"time"
+ 
+ 	"github.com/kr/pretty"
+ 	"github.com/lib/pq"
+@@ -590,6 +591,11 @@ func TestBackupRestoreSystemJobsProgress(t *testing.T) {
+ func TestBackupRestoreCheckpointing(t *testing.T) {
+ 	defer leaktest.AfterTest(t)()
+ 
++	defer func(oldInterval time.Duration) {
++		sqlccl.BackupCheckpointInterval = oldInterval
++	}(sqlccl.BackupCheckpointInterval)
++	sqlccl.BackupCheckpointInterval = time.Millisecond
++
+ 	var checkpointPath string
+ 
+ 	checkBackup := func(ctx context.Context, ip inProgressState) error {

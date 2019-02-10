@@ -1,0 +1,113 @@
+commit 87d99fe0387ee1df1cf1811d88d37331939ef4ae
+Author: fanmin shi <fanmin.shi@coreos.com>
+Date:   Tue May 9 13:45:11 2017 -0700
+
+    etcd-runner: remove mutex on validate() and release() in global.go
+    
+    election runner can deadlock in atomic release().
+    
+    suppose election runner has two clients A and B.
+    if A is a leader and B is a follower, B obtains lock
+    for release() and waits for A to close(nextc) which signal
+    next round is ready. However, A can only close(nextc) if it
+    obtains lock for release(); hence deadlock.
+    
+    this pr removes atomicity of validate() and release() in global.go
+    and gives the responsibility of locking to each runner.
+    
+    FIXES #7891
+
+diff --git a/tools/functional-tester/etcd-runner/command/election_command.go b/tools/functional-tester/etcd-runner/command/election_command.go
+index e45c9ec..81f1d5c 100644
+--- a/tools/functional-tester/etcd-runner/command/election_command.go
++++ b/tools/functional-tester/etcd-runner/command/election_command.go
+@@ -89,14 +89,14 @@ func runElectionFunc(cmd *cobra.Command, args []string) {
+ 				}
+ 			}()
+ 			err = e.Campaign(ctx, v)
++			cancel()
++			<-donec
+ 			if err == nil {
+ 				observedLeader = v
+ 			}
+ 			if observedLeader == v {
+ 				validateWaiters = len(rcs)
+ 			}
+-			cancel()
+-			<-donec
+ 			select {
+ 			case <-ctx.Done():
+ 				return nil
+diff --git a/tools/functional-tester/etcd-runner/command/global.go b/tools/functional-tester/etcd-runner/command/global.go
+index 1d26f20..4b7ac6e 100644
+--- a/tools/functional-tester/etcd-runner/command/global.go
++++ b/tools/functional-tester/etcd-runner/command/global.go
+@@ -56,7 +56,6 @@ func newClient(eps []string, timeout time.Duration) *clientv3.Client {
+ }
+ 
+ func doRounds(rcs []roundClient, rounds int, requests int) {
+-	var mu sync.Mutex
+ 	var wg sync.WaitGroup
+ 
+ 	wg.Add(len(rcs))
+@@ -73,22 +72,16 @@ func doRounds(rcs []roundClient, rounds int, requests int) {
+ 				for rc.acquire() != nil { /* spin */
+ 				}
+ 
+-				mu.Lock()
+ 				if err := rc.validate(); err != nil {
+ 					log.Fatal(err)
+ 				}
+-				mu.Unlock()
+ 
+ 				time.Sleep(10 * time.Millisecond)
+ 				rc.progress++
+ 				finished <- struct{}{}
+ 
+-				mu.Lock()
+ 				for rc.release() != nil { /* spin */
+-					mu.Unlock()
+-					mu.Lock()
+ 				}
+-				mu.Unlock()
+ 			}
+ 		}(&rcs[i])
+ 	}
+diff --git a/tools/functional-tester/etcd-runner/command/lock_racer_command.go b/tools/functional-tester/etcd-runner/command/lock_racer_command.go
+index b0ec491..1560362 100644
+--- a/tools/functional-tester/etcd-runner/command/lock_racer_command.go
++++ b/tools/functional-tester/etcd-runner/command/lock_racer_command.go
+@@ -18,6 +18,7 @@ import (
+ 	"context"
+ 	"errors"
+ 	"fmt"
++	"sync"
+ 
+ 	"github.com/coreos/etcd/clientv3/concurrency"
+ 
+@@ -47,6 +48,8 @@ func runRacerFunc(cmd *cobra.Command, args []string) {
+ 
+ 	rcs := make([]roundClient, totalClientConnections)
+ 	ctx := context.Background()
++	// mu ensures validate and release funcs are atomic.
++	var mu sync.Mutex
+ 	cnt := 0
+ 
+ 	eps := endpointsFromFlag(cmd)
+@@ -69,12 +72,16 @@ func runRacerFunc(cmd *cobra.Command, args []string) {
+ 		m := concurrency.NewMutex(s, racers)
+ 		rcs[i].acquire = func() error { return m.Lock(ctx) }
+ 		rcs[i].validate = func() error {
++			mu.Lock()
++			defer mu.Unlock()
+ 			if cnt++; cnt != 1 {
+ 				return fmt.Errorf("bad lock; count: %d", cnt)
+ 			}
+ 			return nil
+ 		}
+ 		rcs[i].release = func() error {
++			mu.Lock()
++			defer mu.Unlock()
+ 			if err := m.Unlock(ctx); err != nil {
+ 				return err
+ 			}

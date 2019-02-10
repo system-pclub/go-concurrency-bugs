@@ -1,0 +1,31 @@
+commit e7d357b97777afa2c78a0321ef57eb1deeb3fe06
+Author: Tobias Schottdorf <tobias.schottdorf@gmail.com>
+Date:   Mon Apr 18 04:17:47 2016 -0400
+
+    storage: do not share *roachpb.Error
+    
+    Previous code was returning the same `*roachpb.Error` to multiple
+    clients blocked on a LeaderLease request, which cause data races.
+    
+    In the absence of similar issues present elsewhere, this fixes #6100
+    and fixes #6099.
+
+diff --git a/storage/replica.go b/storage/replica.go
+index d371949..e3d6857 100644
+--- a/storage/replica.go
++++ b/storage/replica.go
+@@ -513,8 +513,12 @@ func (r *Replica) requestLeaderLease(timestamp roachpb.Timestamp) <-chan *roachp
+ 		// Send result of leader lease to all waiter channels.
+ 		r.mu.Lock()
+ 		defer r.mu.Unlock()
+-		for _, llChan := range r.mu.llChans {
+-			llChan <- pErr
++		for i, llChan := range r.mu.llChans {
++			if i == 0 {
++				llChan <- pErr
++			} else {
++				llChan <- protoutil.Clone(pErr).(*roachpb.Error)
++			}
+ 		}
+ 		r.mu.llChans = r.mu.llChans[:0]
+ 	}) {

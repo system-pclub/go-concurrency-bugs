@@ -1,0 +1,35 @@
+commit b38cee9f9c79d1f12001348303b78462d99664ed
+Author: Tonis Tiigi <tonistiigi@gmail.com>
+Date:   Thu Mar 31 09:48:20 2016 -0700
+
+    Fix race between with event timer stopping early
+    
+    Signed-off-by: Tonis Tiigi <tonistiigi@gmail.com>
+
+diff --git a/api/server/router/system/system_routes.go b/api/server/router/system/system_routes.go
+index 2ec21c5..93ce6fe 100644
+--- a/api/server/router/system/system_routes.go
++++ b/api/server/router/system/system_routes.go
+@@ -55,11 +55,10 @@ func (s *systemRouter) getEvents(ctx context.Context, w http.ResponseWriter, r *
+ 		return err
+ 	}
+ 
+-	timer := time.NewTimer(0)
+-	timer.Stop()
++	var timeout <-chan time.Time
+ 	if until > 0 || untilNano > 0 {
+ 		dur := time.Unix(until, untilNano).Sub(time.Now())
+-		timer = time.NewTimer(dur)
++		timeout = time.NewTimer(dur).C
+ 	}
+ 
+ 	ef, err := filters.FromParam(r.Form.Get("filters"))
+@@ -94,7 +93,7 @@ func (s *systemRouter) getEvents(ctx context.Context, w http.ResponseWriter, r *
+ 			if err := enc.Encode(jev); err != nil {
+ 				return err
+ 			}
+-		case <-timer.C:
++		case <-timeout:
+ 			return nil
+ 		case <-ctx.Done():
+ 			logrus.Debug("Client context cancelled, stop sending events")

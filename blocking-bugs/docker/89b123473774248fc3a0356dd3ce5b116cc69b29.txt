@@ -1,0 +1,78 @@
+commit 89b123473774248fc3a0356dd3ce5b116cc69b29
+Author: Tonis Tiigi <tonistiigi@gmail.com>
+Date:   Tue Nov 15 18:02:26 2016 -0800
+
+    Fix deadlock on cancelling healthcheck
+    
+    Signed-off-by: Tonis Tiigi <tonistiigi@gmail.com>
+
+diff --git a/container/health.go b/container/health.go
+index 81fae50..6e3cd12 100644
+--- a/container/health.go
++++ b/container/health.go
+@@ -42,10 +42,7 @@ func (s *Health) OpenMonitorChannel() chan struct{} {
+ func (s *Health) CloseMonitorChannel() {
+ 	if s.stop != nil {
+ 		logrus.Debug("CloseMonitorChannel: waiting for probe to stop")
+-		// This channel does not buffer. Once the write succeeds, the monitor
+-		// has read the stop request and will not make any further updates
+-		// to c.State.Health.
+-		s.stop <- struct{}{}
++		close(s.stop)
+ 		s.stop = nil
+ 		logrus.Debug("CloseMonitorChannel done")
+ 	}
+diff --git a/daemon/health.go b/daemon/health.go
+index f191472..ff87426 100644
+--- a/daemon/health.go
++++ b/daemon/health.go
+@@ -107,10 +107,17 @@ func (p *cmdProbe) run(ctx context.Context, d *Daemon, container *container.Cont
+ }
+ 
+ // Update the container's Status.Health struct based on the latest probe's result.
+-func handleProbeResult(d *Daemon, c *container.Container, result *types.HealthcheckResult) {
++func handleProbeResult(d *Daemon, c *container.Container, result *types.HealthcheckResult, done chan struct{}) {
+ 	c.Lock()
+ 	defer c.Unlock()
+ 
++	// probe may have been cancelled while waiting on lock. Ignore result then
++	select {
++	case <-done:
++		return
++	default:
++	}
++
+ 	retries := c.Config.Healthcheck.Retries
+ 	if retries <= 0 {
+ 		retries = defaultProbeRetries
+@@ -183,7 +190,7 @@ func monitor(d *Daemon, c *container.Container, stop chan struct{}, probe probe)
+ 				cancelProbe()
+ 				return
+ 			case result := <-results:
+-				handleProbeResult(d, c, result)
++				handleProbeResult(d, c, result, stop)
+ 				// Stop timeout
+ 				cancelProbe()
+ 			case <-ctx.Done():
+@@ -193,7 +200,7 @@ func monitor(d *Daemon, c *container.Container, stop chan struct{}, probe probe)
+ 					Output:   fmt.Sprintf("Health check exceeded timeout (%v)", probeTimeout),
+ 					Start:    startTime,
+ 					End:      time.Now(),
+-				})
++				}, stop)
+ 				cancelProbe()
+ 				// Wait for probe to exit (it might take a while to respond to the TERM
+ 				// signal and we don't want dying probes to pile up).
+diff --git a/daemon/health_test.go b/daemon/health_test.go
+index bd221aa..545b57b 100644
+--- a/daemon/health_test.go
++++ b/daemon/health_test.go
+@@ -80,7 +80,7 @@ func TestHealthStates(t *testing.T) {
+ 			Start:    startTime,
+ 			End:      startTime,
+ 			ExitCode: exitCode,
+-		})
++		}, nil)
+ 	}
+ 
+ 	// starting -> failed -> success -> failed

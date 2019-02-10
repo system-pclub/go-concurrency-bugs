@@ -1,0 +1,63 @@
+commit 9bf770cd8f6eaff5441b80d3aec1a5614e8747e1
+Author: Peter Mattis <petermattis@gmail.com>
+Date:   Fri Jan 27 13:06:46 2017 -0500
+
+    sql: fix go1.8 goroutine leaks
+    
+    Need to close sql.Rows objects and Commit/Rollback transactions.
+
+diff --git a/pkg/sql/copy_in_test.go b/pkg/sql/copy_in_test.go
+index ea72dfa..4477e2a 100644
+--- a/pkg/sql/copy_in_test.go
++++ b/pkg/sql/copy_in_test.go
+@@ -99,6 +99,7 @@ func TestCopyNullInfNaN(t *testing.T) {
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
++	defer rows.Close()
+ 
+ 	for row, in := range input {
+ 		if !rows.Next() {
+@@ -206,6 +207,7 @@ func TestCopyRandom(t *testing.T) {
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
++	defer rows.Close()
+ 
+ 	for row, in := range inputs {
+ 		if !rows.Next() {
+diff --git a/pkg/sql/metric_test.go b/pkg/sql/metric_test.go
+index b38307a..65590ff 100644
+--- a/pkg/sql/metric_test.go
++++ b/pkg/sql/metric_test.go
+@@ -206,4 +206,8 @@ func TestAbortCountErrorDuringTransaction(t *testing.T) {
+ 	if err := checkCounterEQ(s, sql.MetaSelect, 1); err != nil {
+ 		t.Error(err)
+ 	}
++
++	if err := txn.Rollback(); err != nil {
++		t.Fatal(err)
++	}
+ }
+diff --git a/pkg/sql/txn_restart_test.go b/pkg/sql/txn_restart_test.go
+index 6661435..528a021 100644
+--- a/pkg/sql/txn_restart_test.go
++++ b/pkg/sql/txn_restart_test.go
+@@ -965,6 +965,9 @@ func TestRollbackToSavepointStatement(t *testing.T) {
+ 	) {
+ 		t.Fatalf("unexpected error: %v", err)
+ 	}
++	if err := tx.Rollback(); err != nil {
++		t.Fatal(err)
++	}
+ }
+ 
+ // TestNonRetriableError checks that a non-retriable error (e.g. duplicate key)
+@@ -1257,4 +1260,7 @@ INSERT INTO t.test (k, v) VALUES ('test_key', 'test_val');
+ 	if !testutils.IsError(err, "pq: retryable error from another txn: forced by crdb_internal.force_retry()") {
+ 		t.Fatalf("unexpected error: %v", err)
+ 	}
++	if err := tx.Rollback(); err != nil {
++		t.Fatal(err)
++	}
+ }

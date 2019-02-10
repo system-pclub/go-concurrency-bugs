@@ -1,0 +1,22 @@
+commit 6a624a2b4feebe51cf2acd165e860604fe7f1aba
+Author: Tim Hockin <thockin@google.com>
+Date:   Tue Sep 2 09:36:02 2014 -0700
+
+    try to fix data race
+
+diff --git a/pkg/apiserver/operation_test.go b/pkg/apiserver/operation_test.go
+index e74f359..6e32aa4 100644
+--- a/pkg/apiserver/operation_test.go
++++ b/pkg/apiserver/operation_test.go
+@@ -72,8 +72,9 @@ func TestOperation(t *testing.T) {
+ 	}
+ 
+ 	time.Sleep(100 * time.Millisecond)
+-	if waited != waiters {
+-		t.Errorf("Multiple waiters doesn't work, only %v finished", waited)
++	finished := atomic.LoadInt32(&waited)
++	if finished != waiters {
++		t.Errorf("Multiple waiters doesn't work, only %v finished", finished)
+ 	}
+ 
+ 	if op.expired(time.Now().Add(-time.Second)) {

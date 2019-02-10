@@ -1,0 +1,40 @@
+commit 214d0189113347a5475c227feff23330196613f5
+Author: Jeff Grafton <jgrafton@google.com>
+Date:   Thu Feb 11 15:32:46 2016 -0800
+
+    Fix deadlock in nettest webserver
+
+diff --git a/test/images/network-tester/Makefile b/test/images/network-tester/Makefile
+index 6392da4..f1de44b 100644
+--- a/test/images/network-tester/Makefile
++++ b/test/images/network-tester/Makefile
+@@ -12,13 +12,13 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
+-TAG = 1.6
++TAG = 1.7
+ PREFIX = gcr.io/google_containers
+ 
+ all: push
+ 
+ webserver: webserver.go
+-	CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags '-w' ./webserver.go
++	CGO_ENABLED=0 GOOS=linux godep go build -a -installsuffix cgo -ldflags '-w' ./webserver.go
+ 
+ container: image
+ 
+diff --git a/test/images/network-tester/webserver.go b/test/images/network-tester/webserver.go
+index 67482a7..bc00b5c 100644
+--- a/test/images/network-tester/webserver.go
++++ b/test/images/network-tester/webserver.go
+@@ -90,7 +90,8 @@ func (s *State) serveStatus(w http.ResponseWriter, r *http.Request) {
+ 		fmt.Fprintf(w, "running")
+ 		return
+ 	}
+-	s.Logf("Declaring failure for %s/%s with %d sent and %d received and %d peers", *namespace, *service, len(s.Sent), len(s.Received), *peerCount)
++	// Logf can't be called while holding the lock, so defer using a goroutine
++	go s.Logf("Declaring failure for %s/%s with %d sent and %d received and %d peers", *namespace, *service, len(s.Sent), len(s.Received), *peerCount)
+ 	fmt.Fprintf(w, "fail")
+ }
+ 

@@ -1,0 +1,33 @@
+commit e5e62b96ce0d4eb3934a386b07203830f55e07ce
+Author: Pei Su <sillyousu@gmail.com>
+Date:   Tue Jan 19 20:30:48 2016 +0800
+
+    Fix race condition in execCommandGC
+    
+    `daemon.execCommandGC`
+    The daemon object (grep execCommandGC) iterate over a map
+    (grep execCommands.Commands) in a goroutine.
+    Lock can't protect concurrency access in this case.
+    Exec command storage object should return a copy of commands instead.
+    
+    Signed-off-by: Pei Su <sillyousu@gmail.com>
+
+diff --git a/daemon/exec/exec.go b/daemon/exec/exec.go
+index 5536623..6941cde 100644
+--- a/daemon/exec/exec.go
++++ b/daemon/exec/exec.go
+@@ -53,7 +53,13 @@ func NewStore() *Store {
+ 
+ // Commands returns the exec configurations in the store.
+ func (e *Store) Commands() map[string]*Config {
+-	return e.commands
++	e.RLock()
++	commands := make(map[string]*Config, len(e.commands))
++	for id, config := range e.commands {
++		commands[id] = config
++	}
++	e.RUnlock()
++	return commands
+ }
+ 
+ // Add adds a new exec configuration to the store.

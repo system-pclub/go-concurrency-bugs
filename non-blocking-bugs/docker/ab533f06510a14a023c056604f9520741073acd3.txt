@@ -1,0 +1,38 @@
+commit ab533f06510a14a023c056604f9520741073acd3
+Author: Akihiro Suda <suda.akihiro@lab.ntt.co.jp>
+Date:   Wed May 25 04:19:01 2016 +0000
+
+    Fix a race in daemon/logger.TestCopier
+    
+    Update #22963
+    
+    Signed-off-by: Akihiro Suda <suda.akihiro@lab.ntt.co.jp>
+
+diff --git a/daemon/logger/copier_test.go b/daemon/logger/copier_test.go
+index 30239f0..3b1ffe9 100644
+--- a/daemon/logger/copier_test.go
++++ b/daemon/logger/copier_test.go
+@@ -4,12 +4,14 @@ import (
+ 	"bytes"
+ 	"encoding/json"
+ 	"io"
++	"sync"
+ 	"testing"
+ 	"time"
+ )
+ 
+ type TestLoggerJSON struct {
+ 	*json.Encoder
++	mu    sync.Mutex
+ 	delay time.Duration
+ }
+ 
+@@ -17,6 +19,8 @@ func (l *TestLoggerJSON) Log(m *Message) error {
+ 	if l.delay > 0 {
+ 		time.Sleep(l.delay)
+ 	}
++	l.mu.Lock()
++	defer l.mu.Unlock()
+ 	return l.Encode(m)
+ }
+ 

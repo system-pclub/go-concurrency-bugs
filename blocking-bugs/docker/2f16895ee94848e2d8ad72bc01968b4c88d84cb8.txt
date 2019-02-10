@@ -1,0 +1,73 @@
+commit 2f16895ee94848e2d8ad72bc01968b4c88d84cb8
+Author: Vivek Goyal <vgoyal@redhat.com>
+Date:   Mon Oct 19 17:51:17 2015 -0400
+
+    devmapper: Drop devices lock before returning from function
+    
+    cleanupDeleted() takes devices.Lock() but does not drop it if there are
+    no deleted devices. Hence docker deadlocks if one is using deferred
+    device deletion feature. (--storage-opt dm.use_deferred_deletion=true).
+    
+    Fix it. Drop the lock before returning.
+    
+    Also added a unit test case to make sure in future this can be easily
+    detected if somebody changes the function.
+    
+    Signed-off-by: Vivek Goyal <vgoyal@redhat.com>
+
+diff --git a/daemon/graphdriver/devmapper/deviceset.go b/daemon/graphdriver/devmapper/deviceset.go
+index 130f2e3..06933ae 100644
+--- a/daemon/graphdriver/devmapper/deviceset.go
++++ b/daemon/graphdriver/devmapper/deviceset.go
+@@ -599,6 +599,7 @@ func (devices *DeviceSet) cleanupDeletedDevices() error {
+ 
+ 	// If there are no deleted devices, there is nothing to do.
+ 	if devices.nrDeletedDevices == 0 {
++		devices.Unlock()
+ 		return nil
+ 	}
+ 
+diff --git a/daemon/graphdriver/devmapper/devmapper_test.go b/daemon/graphdriver/devmapper/devmapper_test.go
+index 61577b0..5c2abce 100644
+--- a/daemon/graphdriver/devmapper/devmapper_test.go
++++ b/daemon/graphdriver/devmapper/devmapper_test.go
+@@ -5,6 +5,7 @@ package devmapper
+ import (
+ 	"fmt"
+ 	"testing"
++	"time"
+ 
+ 	"github.com/docker/docker/daemon/graphdriver"
+ 	"github.com/docker/docker/daemon/graphdriver/graphtest"
+@@ -79,3 +80,31 @@ func testChangeLoopBackSize(t *testing.T, delta, expectDataSize, expectMetaDataS
+ 		t.Fatal(err)
+ 	}
+ }
++
++// Make sure devices.Lock() has been release upon return from cleanupDeletedDevices() function
++func TestDevmapperLockReleasedDeviceDeletion(t *testing.T) {
++	driver := graphtest.GetDriver(t, "devicemapper").(*graphtest.Driver).Driver.(*graphdriver.NaiveDiffDriver).ProtoDriver.(*Driver)
++	defer graphtest.PutDriver(t)
++
++	// Call cleanupDeletedDevices() and after the call take and release
++	// DeviceSet Lock. If lock has not been released, this will hang.
++	driver.DeviceSet.cleanupDeletedDevices()
++
++	doneChan := make(chan bool)
++
++	go func() {
++		driver.DeviceSet.Lock()
++		defer driver.DeviceSet.Unlock()
++		doneChan <- true
++	}()
++
++	select {
++	case <-time.After(time.Second * 5):
++		// Timer expired. That means lock was not released upon
++		// function return and we are deadlocked. Release lock
++		// here so that cleanup could succeed and fail the test.
++		driver.DeviceSet.Unlock()
++		t.Fatalf("Could not acquire devices lock after call to cleanupDeletedDevices()")
++	case <-doneChan:
++	}
++}

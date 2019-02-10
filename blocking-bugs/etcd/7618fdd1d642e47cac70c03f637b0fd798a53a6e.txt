@@ -1,0 +1,29 @@
+commit 7618fdd1d642e47cac70c03f637b0fd798a53a6e
+Author: Anthony Romano <anthony.romano@coreos.com>
+Date:   Fri Nov 18 16:55:26 2016 -0800
+
+    grpcproxy: fix deadlock on watch broadcasts stop
+    
+    Holding the WatchBroadcasts lock and waiting on donec was
+    causing a deadlock with the coalesce loop. Was causing
+    TestV3WatchSyncCancel to hang.
+
+diff --git a/proxy/grpcproxy/watch_broadcasts.go b/proxy/grpcproxy/watch_broadcasts.go
+index fc18b74..3ca6fa2 100644
+--- a/proxy/grpcproxy/watch_broadcasts.go
++++ b/proxy/grpcproxy/watch_broadcasts.go
+@@ -116,13 +116,12 @@ func (wbs *watchBroadcasts) empty() bool { return len(wbs.bcasts) == 0 }
+ 
+ func (wbs *watchBroadcasts) stop() {
+ 	wbs.mu.Lock()
+-	defer wbs.mu.Unlock()
+-
+ 	for wb := range wbs.bcasts {
+ 		wb.stop()
+ 	}
+ 	wbs.bcasts = nil
+ 	close(wbs.updatec)
++	wbs.mu.Unlock()
+ 	<-wbs.donec
+ }
+ 

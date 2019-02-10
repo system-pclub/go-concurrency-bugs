@@ -1,0 +1,39 @@
+commit fb12a4e412fee79c8c59277f7e49d5cca5ed901f
+Author: Xiang Li <xiangli.cs@gmail.com>
+Date:   Fri May 22 13:58:26 2015 -0700
+
+    storage: fix a deadlock in batch tx
+
+diff --git a/storage/backend/batch_tx.go b/storage/backend/batch_tx.go
+index 5df76f2..ca8cc45 100644
+--- a/storage/backend/batch_tx.go
++++ b/storage/backend/batch_tx.go
+@@ -43,7 +43,7 @@ func (t *batchTx) UnsafePut(bucketName []byte, key []byte, value []byte) {
+ 	}
+ 	t.pending++
+ 	if t.pending > t.backend.batchLimit {
+-		t.Commit()
++		t.commit()
+ 		t.pending = 0
+ 	}
+ }
+@@ -85,7 +85,7 @@ func (t *batchTx) UnsafeDelete(bucketName []byte, key []byte) {
+ 	}
+ 	t.pending++
+ 	if t.pending > t.backend.batchLimit {
+-		t.Commit()
++		t.commit()
+ 		t.pending = 0
+ 	}
+ }
+@@ -94,7 +94,10 @@ func (t *batchTx) UnsafeDelete(bucketName []byte, key []byte) {
+ func (t *batchTx) Commit() {
+ 	t.Lock()
+ 	defer t.Unlock()
++	t.commit()
++}
+ 
++func (t *batchTx) commit() {
+ 	var err error
+ 	// commit the last tx
+ 	if t.tx != nil {

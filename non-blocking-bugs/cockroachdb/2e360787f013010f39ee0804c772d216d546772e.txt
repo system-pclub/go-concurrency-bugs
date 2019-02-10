@@ -1,0 +1,35 @@
+commit 2e360787f013010f39ee0804c772d216d546772e
+Author: Tamir Duberstein <tamird@gmail.com>
+Date:   Mon Jun 6 14:49:30 2016 -0400
+
+    rpc: avoid data race during shutdown
+    
+    Fixes #7057.
+
+diff --git a/rpc/context.go b/rpc/context.go
+index ddef401..ca0ec42 100644
+--- a/rpc/context.go
++++ b/rpc/context.go
+@@ -167,13 +167,15 @@ func (ctx *Context) GRPCDial(target string, opts ...grpc.DialOption) (*grpc.Clie
+ 		}
+ 		ctx.conns.cache[target] = conn
+ 
+-		ctx.Stopper.RunWorker(func() {
+-			if err := ctx.runHeartbeat(conn, target); err != nil && !grpcutil.IsClosedConnection(err) {
+-				log.Error(err)
+-			}
+-			ctx.conns.Lock()
+-			ctx.removeConn(target, conn)
+-			ctx.conns.Unlock()
++		ctx.Stopper.RunTask(func() {
++			ctx.Stopper.RunWorker(func() {
++				if err := ctx.runHeartbeat(conn, target); err != nil && !grpcutil.IsClosedConnection(err) {
++					log.Error(err)
++				}
++				ctx.conns.Lock()
++				ctx.removeConn(target, conn)
++				ctx.conns.Unlock()
++			})
+ 		})
+ 	}
+ 	return conn, err

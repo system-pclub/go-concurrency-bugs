@@ -1,0 +1,50 @@
+commit f2d384fca6fa08da13fdc01c7991e8e35b081198
+Author: Brian Goff <cpuguy83@gmail.com>
+Date:   Tue Jan 24 11:08:13 2017 -0500
+
+    Fix deadlock on v1 plugin with activate error
+    
+    When a plugin has an activation error, it was not being checked in the
+    `waitActive` loop. This means it will just wait forever for a manifest
+    to be populated even though it may never come.
+    
+    Signed-off-by: Brian Goff <cpuguy83@gmail.com>
+
+diff --git a/pkg/plugins/plugin_test.go b/pkg/plugins/plugin_test.go
+index ac81056..b19c0d5 100644
+--- a/pkg/plugins/plugin_test.go
++++ b/pkg/plugins/plugin_test.go
+@@ -1,6 +1,7 @@
+ package plugins
+ 
+ import (
++	"errors"
+ 	"path/filepath"
+ 	"runtime"
+ 	"sync"
+@@ -20,6 +21,12 @@ func TestPluginAddHandler(t *testing.T) {
+ 	testActive(t, p)
+ }
+ 
++func TestPluginWaitBadPlugin(t *testing.T) {
++	p := &Plugin{activateWait: sync.NewCond(&sync.Mutex{})}
++	p.activateErr = errors.New("some junk happened")
++	testActive(t, p)
++}
++
+ func testActive(t *testing.T, p *Plugin) {
+ 	done := make(chan struct{})
+ 	go func() {
+diff --git a/pkg/plugins/plugins.go b/pkg/plugins/plugins.go
+index e60e0ee..c0059cb 100644
+--- a/pkg/plugins/plugins.go
++++ b/pkg/plugins/plugins.go
+@@ -169,7 +169,7 @@ func (p *Plugin) activateWithLock() error {
+ 
+ func (p *Plugin) waitActive() error {
+ 	p.activateWait.L.Lock()
+-	for !p.activated() {
++	for !p.activated() && p.activateErr == nil {
+ 		p.activateWait.Wait()
+ 	}
+ 	p.activateWait.L.Unlock()

@@ -1,0 +1,21 @@
+commit 380e8e1dcee91861a8a96aa6a0600c1d8500c902
+Author: Spencer Kimball <spencer.kimball@gmail.com>
+Date:   Tue May 12 12:21:38 2015 -0400
+
+    Fix data race in rangeStats.
+    
+    Fixes #995
+
+diff --git a/storage/stats.go b/storage/stats.go
+index 7f28d77..f98d878 100644
+--- a/storage/stats.go
++++ b/storage/stats.go
+@@ -74,6 +74,8 @@ func (rs *rangeStats) GetSize() int64 {
+ // the last update to range stats. Stats are stored to the underlying
+ // engine and the rangeStats MVCCStats updated to reflect merged totals.
+ func (rs *rangeStats) MergeMVCCStats(e engine.Engine, ms *proto.MVCCStats, nowNanos int64) error {
++	rs.Lock()
++	defer rs.Unlock()
+ 	// Augment the current intent age.
+ 	diffSeconds := nowNanos/1E9 - rs.LastUpdateNanos/1E9
+ 	ms.LastUpdateNanos = nowNanos - rs.LastUpdateNanos

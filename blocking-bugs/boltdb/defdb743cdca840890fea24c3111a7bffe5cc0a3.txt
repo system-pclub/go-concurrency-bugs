@@ -1,0 +1,52 @@
+commit defdb743cdca840890fea24c3111a7bffe5cc0a3
+Author: Ben Johnson <benbjohnson@yahoo.com>
+Date:   Fri Jun 13 12:07:37 2014 -0600
+
+    Fix deadlock on remmap.
+    
+    This commit fixes a deadlock situation that can occur when Bolt's database size crosses a threshold
+    and requires remapping the mmap.
+
+diff --git a/db.go b/db.go
+index 8f80515..0b4631f 100644
+--- a/db.go
++++ b/db.go
+@@ -340,17 +340,20 @@ func (db *DB) Begin(writable bool) (*Tx, error) {
+ }
+ 
+ func (db *DB) beginTx() (*Tx, error) {
++	// Lock the meta pages while we initialize the transaction. We obtain
++	// the meta lock before the mmap lock because that's the order that the
++	// write transaction will obtain them.
++	db.metalock.Lock()
++
+ 	// Obtain a read-only lock on the mmap. When the mmap is remapped it will
+ 	// obtain a write lock so all transactions must finish before it can be
+ 	// remapped.
+ 	db.mmaplock.RLock()
+ 
+-	// Lock the meta pages while we initialize the transaction.
+-	db.metalock.Lock()
+-
+ 	// Exit if the database is not open yet.
+ 	if !db.opened {
+ 		db.mmaplock.RUnlock()
++		db.metalock.Unlock()
+ 		return nil, ErrDatabaseNotOpen
+ 	}
+ 
+@@ -411,11 +414,12 @@ func (db *DB) beginRWTx() (*Tx, error) {
+ 
+ // removeTx removes a transaction from the database.
+ func (db *DB) removeTx(tx *Tx) {
+-	db.metalock.Lock()
+-
+ 	// Release the read lock on the mmap.
+ 	db.mmaplock.RUnlock()
+ 
++	// Use the meta lock to restrict access to the DB object.
++	db.metalock.Lock()
++
+ 	// Remove the transaction.
+ 	for i, t := range db.txs {
+ 		if t == tx {

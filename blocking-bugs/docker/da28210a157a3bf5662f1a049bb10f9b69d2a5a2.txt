@@ -1,0 +1,9 @@
+commit da28210a157a3bf5662f1a049bb10f9b69d2a5a2
+Merge: 33fd381 67297ba
+Author: Aaron Lehmann <aaron.lehmann@docker.com>
+Date:   Mon Jun 26 15:34:43 2017 -0700
+
+    Merge pull request #33781 from mlaventure/fix-healhcheck-goroutine-leak
+    
+    Prevent a goroutine leak when healthcheck gets stopped
+

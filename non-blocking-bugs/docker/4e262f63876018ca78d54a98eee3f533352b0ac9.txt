@@ -1,0 +1,73 @@
+commit 4e262f63876018ca78d54a98eee3f533352b0ac9
+Author: Tonis Tiigi <tonistiigi@gmail.com>
+Date:   Mon Nov 21 14:10:34 2016 -0800
+
+    Fix race on sending stdin close event
+    
+    Signed-off-by: Tonis Tiigi <tonistiigi@gmail.com>
+
+diff --git a/integration-cli/docker_cli_run_test.go b/integration-cli/docker_cli_run_test.go
+index 81c4d09..033d03a 100644
+--- a/integration-cli/docker_cli_run_test.go
++++ b/integration-cli/docker_cli_run_test.go
+@@ -5,6 +5,7 @@ import (
+ 	"bytes"
+ 	"encoding/json"
+ 	"fmt"
++	"io"
+ 	"io/ioutil"
+ 	"net"
+ 	"os"
+@@ -4849,3 +4850,32 @@ func (s *DockerSuite) TestRunEmptyEnv(c *check.C) {
+ 	c.Assert(err, checker.NotNil)
+ 	c.Assert(out, checker.Contains, expectedOutput)
+ }
++
++// #28658
++func (s *DockerSuite) TestSlowStdinClosing(c *check.C) {
++	name := "testslowstdinclosing"
++	repeat := 3 // regression happened 50% of the time
++	for i := 0; i < repeat; i++ {
++		cmd := exec.Command(dockerBinary, "run", "--rm", "--name", name, "-i", "busybox", "cat")
++		cmd.Stdin = &delayedReader{}
++		done := make(chan error, 1)
++		go func() {
++			_, err := runCommand(cmd)
++			done <- err
++		}()
++
++		select {
++		case <-time.After(15 * time.Second):
++			c.Fatal("running container timed out") // cleanup in teardown
++		case err := <-done:
++			c.Assert(err, checker.IsNil)
++		}
++	}
++}
++
++type delayedReader struct{}
++
++func (s *delayedReader) Read([]byte) (int, error) {
++	time.Sleep(500 * time.Millisecond)
++	return 0, io.EOF
++}
+diff --git a/libcontainerd/container_unix.go b/libcontainerd/container_unix.go
+index 61d2b2a..1bd6050 100644
+--- a/libcontainerd/container_unix.go
++++ b/libcontainerd/container_unix.go
+@@ -118,10 +118,14 @@ func (ctr *container) start(checkpoint string, checkpointDir string, attachStdio
+ 			go func() {
+ 				select {
+ 				case <-ready:
++				case <-ctx.Done():
++				}
++				select {
++				case <-ready:
+ 					if err := ctr.sendCloseStdin(); err != nil {
+ 						logrus.Warnf("failed to close stdin: %+v", err)
+ 					}
+-				case <-ctx.Done():
++				default:
+ 				}
+ 			}()
+ 		})

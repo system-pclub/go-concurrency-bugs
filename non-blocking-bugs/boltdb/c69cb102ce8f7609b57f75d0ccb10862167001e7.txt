@@ -1,0 +1,9 @@
+commit c69cb102ce8f7609b57f75d0ccb10862167001e7
+Merge: 55af28c e929eba
+Author: Ben Johnson <benbjohnson@yahoo.com>
+Date:   Thu May 21 09:02:35 2015 -0600
+
+    Merge pull request #377 from benbjohnson/close-race
+    
+    Wait for pending transactions on close
+

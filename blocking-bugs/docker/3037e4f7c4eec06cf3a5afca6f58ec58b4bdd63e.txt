@@ -1,0 +1,24 @@
+commit 3037e4f7c4eec06cf3a5afca6f58ec58b4bdd63e
+Author: Tonis Tiigi <tonistiigi@gmail.com>
+Date:   Mon Aug 31 14:24:05 2015 -0700
+
+    Fix goroutine leak on pull
+    
+    Close the pipeWriter even if there was no error.
+    
+    Signed-off-by: Tonis Tiigi <tonistiigi@gmail.com>
+
+diff --git a/graph/pull_v2.go b/graph/pull_v2.go
+index 96f47b8..116fee7 100644
+--- a/graph/pull_v2.go
++++ b/graph/pull_v2.go
+@@ -230,6 +230,9 @@ func (p *v2Puller) pullV2Tag(out io.Writer, tag, taggedName string) (verified bo
+ 			// set the error. All successive reads/writes will return with this
+ 			// error.
+ 			pipeWriter.CloseWithError(errors.New("download canceled"))
++		} else {
++			// If no error then just close the pipe.
++			pipeWriter.Close()
+ 		}
+ 	}()
+ 

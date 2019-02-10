@@ -1,0 +1,67 @@
+commit 37addf0a50ccba51630368c6ed09eb08166d6f48
+Author: Fabio Kung <fabio.kung@gmail.com>
+Date:   Thu Jun 22 07:46:26 2017 -0700
+
+    Net operations already hold locks to containers
+    
+    Fix a deadlock caused by re-entrant locks on container objects.
+    
+    Signed-off-by: Fabio Kung <fabio.kung@gmail.com>
+
+diff --git a/daemon/container_operations.go b/daemon/container_operations.go
+index e4b6789..00ed2f4 100644
+--- a/daemon/container_operations.go
++++ b/daemon/container_operations.go
+@@ -45,16 +45,6 @@ func (daemon *Daemon) getDNSSearchSettings(container *container.Container) []str
+ 	return nil
+ }
+ 
+-// checkpointAndSave grabs a container lock to safely call container.CheckpointTo
+-func (daemon *Daemon) checkpointAndSave(container *container.Container) error {
+-	container.Lock()
+-	defer container.Unlock()
+-	if err := container.CheckpointTo(daemon.containersReplica); err != nil {
+-		return fmt.Errorf("Error saving container state: %v", err)
+-	}
+-	return nil
+-}
+-
+ func (daemon *Daemon) buildSandboxOptions(container *container.Container) ([]libnetwork.SandboxOption, error) {
+ 	var (
+ 		sboxOptions []libnetwork.SandboxOption
+@@ -1017,7 +1007,7 @@ func (daemon *Daemon) ConnectToNetwork(container *container.Container, idOrName
+ 		}
+ 	}
+ 
+-	return daemon.checkpointAndSave(container)
++	return container.CheckpointTo(daemon.containersReplica)
+ }
+ 
+ // DisconnectFromNetwork disconnects container from network n.
+@@ -1053,7 +1043,7 @@ func (daemon *Daemon) DisconnectFromNetwork(container *container.Container, netw
+ 		return err
+ 	}
+ 
+-	if err := daemon.checkpointAndSave(container); err != nil {
++	if err := container.CheckpointTo(daemon.containersReplica); err != nil {
+ 		return err
+ 	}
+ 
+diff --git a/daemon/daemon.go b/daemon/daemon.go
+index ff40bdb..ac03b75 100644
+--- a/daemon/daemon.go
++++ b/daemon/daemon.go
+@@ -1233,3 +1233,13 @@ func CreateDaemonRoot(config *config.Config) error {
+ 	}
+ 	return setupDaemonRoot(config, realRoot, idMappings.RootPair())
+ }
++
++// checkpointAndSave grabs a container lock to safely call container.CheckpointTo
++func (daemon *Daemon) checkpointAndSave(container *container.Container) error {
++	container.Lock()
++	defer container.Unlock()
++	if err := container.CheckpointTo(daemon.containersReplica); err != nil {
++		return fmt.Errorf("Error saving container state: %v", err)
++	}
++	return nil
++}

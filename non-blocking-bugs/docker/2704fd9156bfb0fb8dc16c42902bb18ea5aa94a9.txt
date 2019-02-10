@@ -1,0 +1,67 @@
+commit 2704fd9156bfb0fb8dc16c42902bb18ea5aa94a9
+Author: Aaron Lehmann <aaron.lehmann@docker.com>
+Date:   Thu Dec 3 16:04:58 2015 -0800
+
+    Fix race in RunCommandWithOutputForDuration
+    
+    This function was starting a goroutine that modifies one of its return
+    values. The intent is for the goroutine to only influence the return
+    value when it's causing the function to return, but it's racy and can
+    also modify the return value when the function is returning due to the
+    timeout. Fix the goroutine to not modify return values directly.
+    
+    Also, give the channel a buffer so that the goroutine doesn't block
+    forever after a timeout.
+    
+    Fixes #18305
+    
+    Signed-off-by: Aaron Lehmann <aaron.lehmann@docker.com>
+
+diff --git a/pkg/integration/utils.go b/pkg/integration/utils.go
+index 6fe1c0a..330a533 100644
+--- a/pkg/integration/utils.go
++++ b/pkg/integration/utils.go
+@@ -104,19 +104,25 @@ func RunCommandWithOutputForDuration(cmd *exec.Cmd, duration time.Duration) (out
+ 	}
+ 	cmd.Stderr = &outputBuffer
+ 
+-	done := make(chan error)
+-
+ 	// Start the command in the main thread..
+ 	err = cmd.Start()
+ 	if err != nil {
+ 		err = fmt.Errorf("Fail to start command %v : %v", cmd, err)
+ 	}
+ 
++	type exitInfo struct {
++		exitErr  error
++		exitCode int
++	}
++
++	done := make(chan exitInfo, 1)
++
+ 	go func() {
+ 		// And wait for it to exit in the goroutine :)
+-		exitErr := cmd.Wait()
+-		exitCode = ProcessExitCode(exitErr)
+-		done <- exitErr
++		info := exitInfo{}
++		info.exitErr = cmd.Wait()
++		info.exitCode = ProcessExitCode(info.exitErr)
++		done <- info
+ 	}()
+ 
+ 	select {
+@@ -126,9 +132,9 @@ func RunCommandWithOutputForDuration(cmd *exec.Cmd, duration time.Duration) (out
+ 			fmt.Printf("failed to kill (pid=%d): %v\n", cmd.Process.Pid, killErr)
+ 		}
+ 		timedOut = true
+-		break
+-	case err = <-done:
+-		break
++	case info := <-done:
++		err = info.exitErr
++		exitCode = info.exitCode
+ 	}
+ 	output = outputBuffer.String()
+ 	return

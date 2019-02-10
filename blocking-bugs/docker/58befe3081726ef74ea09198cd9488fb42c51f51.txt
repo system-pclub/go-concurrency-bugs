@@ -1,0 +1,72 @@
+commit 58befe3081726ef74ea09198cd9488fb42c51f51
+Author: Robert Obryk <robryk@gmail.com>
+Date:   Fri Mar 29 12:42:17 2013 +0100
+
+    Fix a deadlock in CmdStream.
+    
+    As per FIXME, CmdStream could have deadlocked if a command printed
+    enough on stderr. This commit fixes that, but still keeps all of
+    the stderr output in memory.
+
+diff --git a/archive.go b/archive.go
+index 78d4dfc..62d80cb 100644
+--- a/archive.go
++++ b/archive.go
+@@ -52,17 +52,21 @@ func CmdStream(cmd *exec.Cmd) (io.Reader, error) {
+ 		return nil, err
+ 	}
+ 	pipeR, pipeW := io.Pipe()
++	errChan := make(chan []byte)
+ 	go func() {
+-		_, err := io.Copy(pipeW, stdout)
+-		if err != nil {
+-			pipeW.CloseWithError(err)
+-		}
+ 		errText, e := ioutil.ReadAll(stderr)
+ 		if e != nil {
+ 			errText = []byte("(...couldn't fetch stderr: " + e.Error() + ")")
+ 		}
++		errChan <- errText
++	}()
++	go func() {
++		_, err := io.Copy(pipeW, stdout)
++		if err != nil {
++			pipeW.CloseWithError(err)
++		}
++		errText := <-errChan
+ 		if err := cmd.Wait(); err != nil {
+-			// FIXME: can this block if stderr outputs more than the size of StderrPipe()'s buffer?
+ 			pipeW.CloseWithError(errors.New(err.Error() + ": " + string(errText)))
+ 		} else {
+ 			pipeW.Close()
+diff --git a/archive_test.go b/archive_test.go
+index 9f00aec..3458c20 100644
+--- a/archive_test.go
++++ b/archive_test.go
+@@ -1,12 +1,26 @@
+ package docker
+ 
+ import (
++	"io"
+ 	"io/ioutil"
+ 	"os"
+ 	"os/exec"
+ 	"testing"
+ )
+ 
++func TestCmdStreamLargeStderr(t *testing.T) {
++	// This test checks for deadlock; thus, the main failure mode of this test is deadlocking.
++	cmd := exec.Command("/bin/sh", "-c", "dd if=/dev/zero bs=1k count=1000 of=/dev/stderr; echo hello")
++	out, err := CmdStream(cmd)
++	if err != nil {
++		t.Fatalf("Failed to start command: " + err.Error())
++	}
++	_, err = io.Copy(ioutil.Discard, out)
++	if err != nil {
++		t.Fatalf("Command should not have failed (err=%s...)", err.Error()[:100])
++	}
++}
++
+ func TestCmdStreamBad(t *testing.T) {
+ 	badCmd := exec.Command("/bin/sh", "-c", "echo hello; echo >&2 error couldn\\'t reverse the phase pulser; exit 1")
+ 	out, err := CmdStream(badCmd)

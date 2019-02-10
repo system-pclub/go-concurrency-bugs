@@ -1,0 +1,95 @@
+commit a69a59ffc7e3d028a72d1195c2c1535f447eaa84
+Author: Tom Booth <tombooth@gmail.com>
+Date:   Wed Oct 26 13:56:10 2016 +0100
+
+    Decouple removing the fileWatcher from reading
+    
+    Fixes #27779
+    
+    Currently `followLogs` can get into a deadlock if we receive an inotify
+    IN_MODIFY event while we are trying to close the `fileWatcher`. This is
+    due to the fact that closing the `fileWatcher` happens in the same block
+    as consumes events from the `fileWatcher`. We are trying to run
+    `fileWatcher.Close`, which is waiting for an IN_IGNORE event to come in
+    over inotify to confirm the watch was been removed. But, because an
+    IN_MODIFY event has appeared after `Close` was entered but before the
+    IN_IGNORE, the broadcast never comes. The IN_MODIFY cannot be consumed
+    as the events channel is unbuffered and the only `select` that reads
+    from it is busy waiting for the IN_IGNORE event.
+    
+    In order to try and fix this race condition I've moved the removal of
+    the `fileWatcher` out to a separate go block that waits for a signal to
+    close, removes the watcher and then signals to the previous selects on
+    the close signal.
+    
+    This has introduced a `fileWatcher.Remove` in the final case, but if we
+    try and remove a watcher that does not exist it will just return an
+    error saying so. We are not doing any checking on the return of `Remove`
+    so this shouldn't cause any side-effects.
+    
+    Signed-off-by: Tom Booth <tombooth@gmail.com>
+
+diff --git a/daemon/logger/jsonfilelog/read.go b/daemon/logger/jsonfilelog/read.go
+index 0ac0cb3..8794e89 100644
+--- a/daemon/logger/jsonfilelog/read.go
++++ b/daemon/logger/jsonfilelog/read.go
+@@ -9,6 +9,7 @@ import (
+ 	"os"
+ 	"time"
+ 
++	"golang.org/x/net/context"
+ 	"gopkg.in/fsnotify.v1"
+ 
+ 	"github.com/Sirupsen/logrus"
+@@ -172,9 +173,22 @@ func followLogs(f *os.File, logWatcher *logger.LogWatcher, notifyRotate chan int
+ 	}
+ 	defer func() {
+ 		f.Close()
++		fileWatcher.Remove(name)
+ 		fileWatcher.Close()
+ 	}()
+ 
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	go func() {
++		select {
++		case <-logWatcher.WatchClose():
++			fileWatcher.Remove(name)
++			cancel()
++		case <-ctx.Done():
++			return
++		}
++	}()
++
+ 	var retries int
+ 	handleRotate := func() error {
+ 		f.Close()
+@@ -209,8 +223,7 @@ func followLogs(f *os.File, logWatcher *logger.LogWatcher, notifyRotate chan int
+ 			case fsnotify.Rename, fsnotify.Remove:
+ 				select {
+ 				case <-notifyRotate:
+-				case <-logWatcher.WatchClose():
+-					fileWatcher.Remove(name)
++				case <-ctx.Done():
+ 					return errDone
+ 				}
+ 				if err := handleRotate(); err != nil {
+@@ -232,8 +245,7 @@ func followLogs(f *os.File, logWatcher *logger.LogWatcher, notifyRotate chan int
+ 				return errRetry
+ 			}
+ 			return err
+-		case <-logWatcher.WatchClose():
+-			fileWatcher.Remove(name)
++		case <-ctx.Done():
+ 			return errDone
+ 		}
+ 	}
+@@ -290,7 +302,7 @@ func followLogs(f *os.File, logWatcher *logger.LogWatcher, notifyRotate chan int
+ 		}
+ 		select {
+ 		case logWatcher.Msg <- msg:
+-		case <-logWatcher.WatchClose():
++		case <-ctx.Done():
+ 			logWatcher.Msg <- msg
+ 			for {
+ 				msg, err := decodeLogLine(dec, l)

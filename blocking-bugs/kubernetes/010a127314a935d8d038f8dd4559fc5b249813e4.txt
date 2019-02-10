@@ -1,0 +1,48 @@
+commit 010a127314a935d8d038f8dd4559fc5b249813e4
+Author: Dan Mace <ironcladlou@gmail.com>
+Date:   Wed Jan 10 16:36:01 2018 -0500
+
+    Fix quota controller worker deadlock
+    
+    The resource quota controller worker pool can deadlock when:
+    
+    * Worker goroutines are idle waiting for work from queues
+    * The Sync() method detects discovery updates to apply
+    
+    The problem is workers acquire a read lock while idle, making write lock
+    acquisition dependent upon the presence of work in the queues.
+    
+    The Sync() method blocks on a pending write lock acquisition and won't unblock
+    until every existing worker processes one item from their queue and releases
+    their read lock. While the Sync() method's lock is pending, all new read lock
+    acquisitions will block; if a worker does process work and release its lock, it
+    will then become blocked on a read lock acquisition; they become blocked on
+    Sync(). This can easily deadlock all the workers processing from one queue while
+    any workers on the other queue remain blocked waiting for work.
+    
+    Fix the deadlock by refactoring workers to acquire a read lock *after* work is
+    popped from the queue. This allows writers to get locks while workers are idle,
+    while preserving the worker pause semantics necessary to allow safe sync.
+
+diff --git a/pkg/controller/resourcequota/resource_quota_controller.go b/pkg/controller/resourcequota/resource_quota_controller.go
+index b2ae6d1..e341e1c 100644
+--- a/pkg/controller/resourcequota/resource_quota_controller.go
++++ b/pkg/controller/resourcequota/resource_quota_controller.go
+@@ -237,15 +237,13 @@ func (rq *ResourceQuotaController) addQuota(obj interface{}) {
+ // worker runs a worker thread that just dequeues items, processes them, and marks them done.
+ func (rq *ResourceQuotaController) worker(queue workqueue.RateLimitingInterface) func() {
+ 	workFunc := func() bool {
+-
+-		rq.workerLock.RLock()
+-		defer rq.workerLock.RUnlock()
+-
+ 		key, quit := queue.Get()
+ 		if quit {
+ 			return true
+ 		}
+ 		defer queue.Done(key)
++		rq.workerLock.RLock()
++		defer rq.workerLock.RUnlock()
+ 		err := rq.syncHandler(key.(string))
+ 		if err == nil {
+ 			queue.Forget(key)

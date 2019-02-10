@@ -1,0 +1,32 @@
+commit 991674380b7773d73afaeafeac6242bf3b6e6001
+Author: Tatsuhiro Tsujikawa <ttsujika@zlab.co.jp>
+Date:   Tue Oct 25 11:20:35 2016 +0900
+
+    Fix resync goroutine leak in ListAndWatch
+    
+    Previously, we had no way to stop resync goroutine when ListAndWatch
+    returned.  goroutine leaked every time ListAndWatch returned, for
+    example, with error.  This commit adds another channel to signal that
+    resync goroutine should exit when ListAndWatch returns.
+
+diff --git a/pkg/client/cache/reflector.go b/pkg/client/cache/reflector.go
+index 8c8aee3..785cab2 100644
+--- a/pkg/client/cache/reflector.go
++++ b/pkg/client/cache/reflector.go
+@@ -259,12 +259,16 @@ func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
+ 	r.setLastSyncResourceVersion(resourceVersion)
+ 
+ 	resyncerrc := make(chan error, 1)
++	cancelCh := make(chan struct{})
++	defer close(cancelCh)
+ 	go func() {
+ 		for {
+ 			select {
+ 			case <-resyncCh:
+ 			case <-stopCh:
+ 				return
++			case <-cancelCh:
++				return
+ 			}
+ 			glog.V(4).Infof("%s: forcing resync", r.name)
+ 			if err := r.store.Resync(); err != nil {

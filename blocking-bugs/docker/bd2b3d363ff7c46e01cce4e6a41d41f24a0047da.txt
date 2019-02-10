@@ -1,0 +1,92 @@
+commit bd2b3d363ff7c46e01cce4e6a41d41f24a0047da
+Author: Tonis Tiigi <tonistiigi@gmail.com>
+Date:   Mon May 23 11:45:04 2016 -0700
+
+    Release memoryStore locks before filter/apply
+    
+    Rework memoryStore so that filters and apply run
+    on a cloned list of containers after the lock has
+    been released. This avoids possible deadlocks when
+    these filter/apply callbacks take locks for a
+    container.
+    
+    Fixes #22732
+    
+    Signed-off-by: Tonis Tiigi <tonistiigi@gmail.com>
+
+diff --git a/container/history.go b/container/history.go
+index afce1d4..c80c2aa 100644
+--- a/container/history.go
++++ b/container/history.go
+@@ -24,11 +24,6 @@ func (history *History) Swap(i, j int) {
+ 	containers[i], containers[j] = containers[j], containers[i]
+ }
+ 
+-// Add the given container to history.
+-func (history *History) Add(container *Container) {
+-	*history = append(*history, container)
+-}
+-
+ // sort orders the history by creation date in descendant order.
+ func (history *History) sort() {
+ 	sort.Sort(history)
+diff --git a/container/memory_store.go b/container/memory_store.go
+index 30c1f7a..9fa1165 100644
+--- a/container/memory_store.go
++++ b/container/memory_store.go
+@@ -41,14 +41,9 @@ func (c *memoryStore) Delete(id string) {
+ // List returns a sorted list of containers from the store.
+ // The containers are ordered by creation date.
+ func (c *memoryStore) List() []*Container {
+-	containers := new(History)
+-	c.RLock()
+-	for _, cont := range c.s {
+-		containers.Add(cont)
+-	}
+-	c.RUnlock()
++	containers := History(c.all())
+ 	containers.sort()
+-	return *containers
++	return containers
+ }
+ 
+ // Size returns the number of containers in the store.
+@@ -60,9 +55,7 @@ func (c *memoryStore) Size() int {
+ 
+ // First returns the first container found in the store by a given filter.
+ func (c *memoryStore) First(filter StoreFilter) *Container {
+-	c.RLock()
+-	defer c.RUnlock()
+-	for _, cont := range c.s {
++	for _, cont := range c.all() {
+ 		if filter(cont) {
+ 			return cont
+ 		}
+@@ -74,11 +67,8 @@ func (c *memoryStore) First(filter StoreFilter) *Container {
+ // This operation is asyncronous in the memory store.
+ // NOTE: Modifications to the store MUST NOT be done by the StoreReducer.
+ func (c *memoryStore) ApplyAll(apply StoreReducer) {
+-	c.RLock()
+-	defer c.RUnlock()
+-
+ 	wg := new(sync.WaitGroup)
+-	for _, cont := range c.s {
++	for _, cont := range c.all() {
+ 		wg.Add(1)
+ 		go func(container *Container) {
+ 			apply(container)
+@@ -89,4 +79,14 @@ func (c *memoryStore) ApplyAll(apply StoreReducer) {
+ 	wg.Wait()
+ }
+ 
++func (c *memoryStore) all() []*Container {
++	c.RLock()
++	containers := make([]*Container, 0, len(c.s))
++	for _, cont := range c.s {
++		containers = append(containers, cont)
++	}
++	c.RUnlock()
++	return containers
++}
++
+ var _ Store = &memoryStore{}

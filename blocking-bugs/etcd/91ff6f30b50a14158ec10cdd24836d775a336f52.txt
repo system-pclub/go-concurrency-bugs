@@ -1,0 +1,35 @@
+commit 91ff6f30b50a14158ec10cdd24836d775a336f52
+Author: Anthony Romano <anthony.romano@coreos.com>
+Date:   Mon Dec 5 14:10:17 2016 -0800
+
+    grpcproxy: fix deadlock in watchbroadcast
+    
+    Calling empty() in watchbroadcast methods was trying to
+    lock the rwmutex when it was already held.
+    
+    Fixes #6937
+
+diff --git a/proxy/grpcproxy/watch_broadcast.go b/proxy/grpcproxy/watch_broadcast.go
+index bee03e9..29fca0d 100644
+--- a/proxy/grpcproxy/watch_broadcast.go
++++ b/proxy/grpcproxy/watch_broadcast.go
+@@ -89,8 +89,8 @@ func (wb *watchBroadcast) bcast(wr clientv3.WatchResponse) {
+ 	for r := range wb.receivers {
+ 		r.send(wr)
+ 	}
+-	if wb.size() > 0 {
+-		eventsCoalescing.Add(float64(wb.size() - 1))
++	if len(wb.receivers) > 0 {
++		eventsCoalescing.Add(float64(len(wb.receivers) - 1))
+ 	}
+ }
+ 
+@@ -135,7 +135,7 @@ func (wb *watchBroadcast) delete(w *watcher) {
+ 		panic("deleting missing watcher from broadcast")
+ 	}
+ 	delete(wb.receivers, w)
+-	if !wb.empty() {
++	if len(wb.receivers) > 0 {
+ 		// do not dec the only left watcher for coalescing.
+ 		watchersCoalescing.Dec()
+ 	}

@@ -1,0 +1,26 @@
+commit 36f5b713bf4cad4702163ed9476ea83de9059b3d
+Author: Anthony Romano <anthony.romano@coreos.com>
+Date:   Tue Feb 14 16:46:01 2017 -0800
+
+    grpcproxy: don't wait for ctx.Done() to close kv donec
+    
+    Causes a goroutine leak in ActiveConnection.Close() tests. Channel is
+    vestigial since removing ccache; revisit if kv ever needs goroutines.
+
+diff --git a/proxy/grpcproxy/kv.go b/proxy/grpcproxy/kv.go
+index 4db3b06..65f850e 100644
+--- a/proxy/grpcproxy/kv.go
++++ b/proxy/grpcproxy/kv.go
+@@ -33,11 +33,7 @@ func NewKvProxy(c *clientv3.Client) (pb.KVServer, <-chan struct{}) {
+ 		cache: cache.NewCache(cache.DefaultMaxEntries),
+ 	}
+ 	donec := make(chan struct{})
+-	go func() {
+-		defer close(donec)
+-		<-c.Ctx().Done()
+-		kv.cache.Close()
+-	}()
++	close(donec)
+ 	return kv, donec
+ }
+ 

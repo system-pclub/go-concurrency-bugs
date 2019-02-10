@@ -1,0 +1,85 @@
+commit 0b77b42cad99623940c93c5d3b80503de665c198
+Author: Yicheng Qin <qycqycqycqycqyc@gmail.com>
+Date:   Fri Jul 18 14:12:56 2014 -0700
+
+    standby: fix leader var race
+
+diff --git a/etcd/etcd_test.go b/etcd/etcd_test.go
+index 46e8782..91591e3 100644
+--- a/etcd/etcd_test.go
++++ b/etcd/etcd_test.go
+@@ -242,13 +242,15 @@ func TestBecomeStandby(t *testing.T) {
+ 
+ 		waitMode(standbyMode, es[i])
+ 
++		var leader int64
+ 		for k := 0; k < 4; k++ {
+-			if es[i].s.leader != noneId {
++			leader, _ = es[i].s.leaderInfo()
++			if leader != noneId {
+ 				break
+ 			}
+ 			time.Sleep(20 * time.Millisecond)
+ 		}
+-		if g := es[i].s.leader; g != lead {
++		if g := leader; g != lead {
+ 			t.Errorf("#%d: lead = %d, want %d", i, g, lead)
+ 		}
+ 
+diff --git a/etcd/standby.go b/etcd/standby.go
+index aac412a..ee270e0 100644
+--- a/etcd/standby.go
++++ b/etcd/standby.go
+@@ -5,6 +5,7 @@ import (
+ 	"log"
+ 	"net/http"
+ 	"strconv"
++	"sync"
+ 	"time"
+ 
+ 	"github.com/coreos/etcd/config"
+@@ -27,6 +28,7 @@ type standby struct {
+ 
+ 	leader      int64
+ 	leaderAddr  string
++	mu          sync.RWMutex
+ 	clusterConf *config.ClusterConfig
+ 
+ 	stopc chan struct{}
+@@ -87,11 +89,24 @@ func (s *standby) stop() {
+ 	close(s.stopc)
+ }
+ 
++func (s *standby) leaderInfo() (int64, string) {
++	s.mu.RLock()
++	defer s.mu.RUnlock()
++	return s.leader, s.leaderAddr
++}
++
++func (s *standby) setLeaderInfo(leader int64, leaderAddr string) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	s.leader, s.leaderAddr = leader, leaderAddr
++}
++
+ func (s *standby) serveRedirect(w http.ResponseWriter, r *http.Request) error {
+-	if s.leader == noneId {
++	leader, leaderAddr := s.leaderInfo()
++	if leader == noneId {
+ 		return fmt.Errorf("no leader in the cluster")
+ 	}
+-	redirectAddr, err := buildRedirectURL(s.leaderAddr, r.URL)
++	redirectAddr, err := buildRedirectURL(leaderAddr, r.URL)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -117,8 +132,7 @@ func (s *standby) syncCluster() error {
+ 				if err != nil {
+ 					return err
+ 				}
+-				s.leader = id
+-				s.leaderAddr = machine.PeerURL
++				s.setLeaderInfo(id, machine.PeerURL)
+ 			}
+ 		}
+ 		s.clusterConf = config

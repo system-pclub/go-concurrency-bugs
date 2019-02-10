@@ -1,0 +1,36 @@
+commit 4d009084de8cad94a180130eb57efa2a98df6d98
+Author: Anusha Ragunathan <anusha@docker.com>
+Date:   Thu Aug 11 15:59:35 2016 -0700
+
+    Fix deadlock on plugin shutdown.
+    
+    Signed-off-by: Anusha Ragunathan <anusha@docker.com>
+
+diff --git a/integration-cli/docker_cli_daemon_experimental_test.go b/integration-cli/docker_cli_daemon_experimental_test.go
+index d57e93a..5fe96ba 100644
+--- a/integration-cli/docker_cli_daemon_experimental_test.go
++++ b/integration-cli/docker_cli_daemon_experimental_test.go
+@@ -46,7 +46,7 @@ func (s *DockerDaemonSuite) TestDaemonRestartWithPluginEnabled(c *check.C) {
+ 	c.Assert(out, checker.Contains, "true")
+ }
+ 
+-// TestDaemonRestartWithPluginEnabled tests state restore for a disabled plugin
++// TestDaemonRestartWithPluginDisabled tests state restore for a disabled plugin
+ func (s *DockerDaemonSuite) TestDaemonRestartWithPluginDisabled(c *check.C) {
+ 	if err := s.d.Start(); err != nil {
+ 		c.Fatalf("Could not start daemon: %v", err)
+diff --git a/plugin/manager_linux.go b/plugin/manager_linux.go
+index 06db3d4..8542ece 100644
+--- a/plugin/manager_linux.go
++++ b/plugin/manager_linux.go
+@@ -174,10 +174,6 @@ func (pm *Manager) Shutdown() {
+ 				}
+ 			}
+ 			close(p.exitChan)
+-			pm.Lock()
+-			p.PluginObj.Active = false
+-			pm.save()
+-			pm.Unlock()
+ 		}
+ 		if err := os.RemoveAll(p.runtimeSourcePath); err != nil {
+ 			logrus.Errorf("Remove plugin runtime failed with error: %v", err)

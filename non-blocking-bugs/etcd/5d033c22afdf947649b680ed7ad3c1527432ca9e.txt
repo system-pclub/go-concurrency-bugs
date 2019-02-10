@@ -1,0 +1,59 @@
+commit 5d033c22afdf947649b680ed7ad3c1527432ca9e
+Author: Xiang Li <xiangli.cs@gmail.com>
+Date:   Fri Sep 25 10:02:37 2015 -0700
+
+    pkg/transport: fix a data race in TestWriteReadTimeoutListener
+
+diff --git a/pkg/transport/timeout_listener_test.go b/pkg/transport/timeout_listener_test.go
+index d2d34e9..7adb32b 100644
+--- a/pkg/transport/timeout_listener_test.go
++++ b/pkg/transport/timeout_listener_test.go
+@@ -68,18 +68,23 @@ func TestWriteReadTimeoutListener(t *testing.T) {
+ 
+ 	// fill the socket buffer
+ 	data := make([]byte, 5*1024*1024)
+-	timer := time.AfterFunc(wln.wtimeoutd*5, func() {
++	done := make(chan struct{})
++	go func() {
++		_, err = conn.Write(data)
++		done <- struct{}{}
++	}()
++
++	select {
++	case <-done:
++	case <-time.After(wln.wtimeoutd * 5):
+ 		t.Fatal("wait timeout")
+-	})
+-	defer timer.Stop()
++	}
+ 
+-	_, err = conn.Write(data)
+ 	if operr, ok := err.(*net.OpError); !ok || operr.Op != "write" || !operr.Timeout() {
+ 		t.Errorf("err = %v, want write i/o timeout error", err)
+ 	}
+ 	stop <- struct{}{}
+ 
+-	timer.Reset(wln.rdtimeoutd * 5)
+ 	go blocker()
+ 
+ 	conn, err = wln.Accept()
+@@ -87,7 +92,18 @@ func TestWriteReadTimeoutListener(t *testing.T) {
+ 		t.Fatalf("unexpected accept error: %v", err)
+ 	}
+ 	buf := make([]byte, 10)
+-	_, err = conn.Read(buf)
++
++	go func() {
++		_, err = conn.Read(buf)
++		done <- struct{}{}
++	}()
++
++	select {
++	case <-done:
++	case <-time.After(wln.rdtimeoutd * 5):
++		t.Fatal("wait timeout")
++	}
++
+ 	if operr, ok := err.(*net.OpError); !ok || operr.Op != "read" || !operr.Timeout() {
+ 		t.Errorf("err = %v, want write i/o timeout error", err)
+ 	}

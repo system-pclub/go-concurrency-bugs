@@ -1,0 +1,29 @@
+commit d32f184696519f909d1db56a060b39f0a08b41c5
+Author: Solomon Hykes <solomon@dotcloud.com>
+Date:   Fri Apr 5 13:03:04 2013 -0700
+
+    Fix a race condition when running the port allocator
+
+diff --git a/network.go b/network.go
+index 2cbe011..5b4f312 100644
+--- a/network.go
++++ b/network.go
+@@ -167,10 +167,6 @@ type PortAllocator struct {
+ }
+ 
+ func (alloc *PortAllocator) runFountain() {
+-	if alloc.fountain != nil {
+-		return
+-	}
+-	alloc.fountain = make(chan int)
+ 	for {
+ 		for port := portRangeStart; port < portRangeEnd; port++ {
+ 			alloc.fountain <- port
+@@ -208,6 +204,7 @@ func (alloc *PortAllocator) Acquire(port int) (int, error) {
+ func newPortAllocator() (*PortAllocator, error) {
+ 	allocator := &PortAllocator{
+ 		inUse: make(map[int]struct{}),
++		fountain: make(chan int),
+ 	}
+ 	go allocator.runFountain()
+ 	return allocator, nil

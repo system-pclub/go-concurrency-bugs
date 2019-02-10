@@ -1,0 +1,122 @@
+commit f1a5c19125c65129b966fbdc0e6408e8df214aba
+Author: Spencer Kimball <spencer.kimball@gmail.com>
+Date:   Fri Nov 18 18:32:14 2016 -0500
+
+    kv: fix goroutine leak on shutdown
+    
+    Fixes #10781
+
+diff --git a/pkg/storage/replica.go b/pkg/storage/replica.go
+index 5876c46..4d23e55 100644
+--- a/pkg/storage/replica.go
++++ b/pkg/storage/replica.go
+@@ -1366,7 +1366,14 @@ func (r *Replica) beginCmds(ctx context.Context, ba *roachpb.BatchRequest) (*end
+ 					// out before their prerequisites, so we still have to wait it
+ 					// out.
+ 					for _, ch := range chans {
+-						<-ch
++						select {
++						case <-ch:
++						case <-r.store.stopper.ShouldQuiesce():
++							// If the process is shutting down, we return without
++							// removing this command from queue. This avoids
++							// dropping out before prerequisites.
++							return
++						}
+ 					}
+ 					r.cmdQMu.Lock()
+ 					r.cmdQMu.global.remove(cmdGlobal)
+@@ -1802,10 +1809,10 @@ func (r *Replica) tryAddWriteCmd(
+ 			return propResult.Reply, propResult.Err, propResult.ShouldRetry
+ 		case <-ctxDone:
+ 			// If our context was cancelled, return an AmbiguousResultError
+-			// to indicate to caller that the command may have executed.
+-			// However, we proceed only if the command isn't already being
+-			// executed and using our context, in which case we expect it to
+-			// finish soon.
++			// if the command isn't already being executed and using our
++			// context, in which case we expect it to finish soon. The
++			// AmbiguousResultError indicates to caller that the command may
++			// have executed.
+ 			if tryAbandon() {
+ 				log.Warningf(ctx, "context cancellation of command %s", ba)
+ 				// Set endCmds to nil because they will be invoked in processRaftCommand.
+@@ -1814,9 +1821,12 @@ func (r *Replica) tryAddWriteCmd(
+ 			}
+ 			ctxDone = nil
+ 		case <-shouldQuiesce:
+-			// If shutting down, return immediately if tryAbandon succeeds.
+-			// We return an AmbiguousResultError to indicate to caller that
+-			// the command may have executed.
++			// If shutting down, return an AmbiguousResultError if the
++			// command isn't already being executed and using our context,
++			// in which case we expect it to finish soon. AmbiguousResultError
++			// indicates to caller that the command may have executed. If
++			// tryAbandon fails, we iterate through the loop again to wait
++			// for the command to finish.
+ 			//
+ 			// Note that in the shutdown case, we *do not* set the endCmds
+ 			// var to nil. We have no expectation during shutdown that Raft
+@@ -3145,7 +3155,9 @@ func (r *Replica) processRaftCommand(
+ 				cmd.LocalProposalData = innerPD.LocalProposalData
+ 				cmd.LocalProposalData.endCmds = endCmds
+ 				cmd.LocalProposalData.doneCh = doneCh
+-				cmd.ctx = nil // already have ctx
++				// Avoid confusion by unsetting the context; we already have one
++				// on the stack which is the correct one to use.
++				cmd.ctx = nil
+ 			}
+ 			// Proposals which would failfast with proposer-evaluated KV now
+ 			// go this route, writing an empty entry and returning this error
+diff --git a/pkg/storage/replica_test.go b/pkg/storage/replica_test.go
+index b9c2706..7128edb 100644
+--- a/pkg/storage/replica_test.go
++++ b/pkg/storage/replica_test.go
+@@ -5773,11 +5773,6 @@ func TestReplicaCancelRaft(t *testing.T) {
+ 			defer tc.Stop()
+ 			if cancelEarly {
+ 				cancel()
+-				tc.repl.mu.Lock()
+-				tc.repl.mu.submitProposalFn = func(*ProposalData) error {
+-					return nil
+-				}
+-				tc.repl.mu.Unlock()
+ 			}
+ 			var ba roachpb.BatchRequest
+ 			ba.Add(&roachpb.GetRequest{
+@@ -5786,25 +5781,21 @@ func TestReplicaCancelRaft(t *testing.T) {
+ 			if err := ba.SetActiveTimestamp(tc.Clock().Now); err != nil {
+ 				t.Fatal(err)
+ 			}
+-			br, pErr := tc.repl.addWriteCmd(ctx, ba)
+-			if pErr == nil {
+-				if !cancelEarly {
++			_, pErr := tc.repl.addWriteCmd(ctx, ba)
++			if cancelEarly {
++				if !testutils.IsPError(pErr, context.Canceled.Error()) {
++					t.Fatalf("expected canceled error; got %v", pErr)
++				}
++			} else {
++				if pErr == nil {
+ 					// We cancelled the context while the command was already
+ 					// being processed, so the client had to wait for successful
+ 					// execution.
+ 					return
+ 				}
+-				t.Fatalf("expected an error, but got successful response %+v", br)
+-			}
+-			// If we cancelled the context early enough, we expect to receive a
+-			// corresponding error and not wait for the command.
+-			if cancelEarly {
+-				if !testutils.IsPError(pErr, context.Canceled.Error()) {
+-					t.Errorf("unexpected error: %s", pErr)
+-				}
+-			} else {
+-				if _, ok := pErr.GetDetail().(*roachpb.AmbiguousResultError); !ok {
+-					t.Errorf("expected an ambiguous result error; got %v", pErr)
++				detail := pErr.GetDetail()
++				if _, ok := detail.(*roachpb.AmbiguousResultError); !ok {
++					t.Fatalf("expected AmbiguousResultError error; got %s (%T)", detail, detail)
+ 				}
+ 			}
+ 		}()

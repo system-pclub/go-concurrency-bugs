@@ -1,0 +1,27 @@
+commit 9df0e935c037988e64e30498b6ecf3c7a99411a2
+Author: iamqizhao <toqizhao@gmail.com>
+Date:   Mon Jun 1 13:02:31 2015 -0700
+
+    fix a race
+
+diff --git a/transport/http2_client.go b/transport/http2_client.go
+index a32d416..169a80d 100644
+--- a/transport/http2_client.go
++++ b/transport/http2_client.go
+@@ -579,12 +579,13 @@ func (t *http2Client) handleSettings(f *http2.SettingsFrame) {
+ 				}
+ 				t.mu.Lock()
+ 				reset := t.streamsQuota != nil
++				if !reset {
++					t.streamsQuota = newQuotaPool(int(v))
++				}
+ 				ms := t.maxStreams
+ 				t.maxStreams = int(v)
+ 				t.mu.Unlock()
+-				if !reset {
+-					t.streamsQuota = newQuotaPool(int(v))
+-				} else {
++				if reset {
+ 					t.streamsQuota.reset(int(v) - ms)
+ 				}
+ 			case http2.SettingInitialWindowSize:

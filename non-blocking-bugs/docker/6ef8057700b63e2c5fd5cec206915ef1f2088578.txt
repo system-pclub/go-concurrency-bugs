@@ -1,0 +1,68 @@
+commit 6ef8057700b63e2c5fd5cec206915ef1f2088578
+Author: Brian Goff <cpuguy83@gmail.com>
+Date:   Fri Jan 16 18:33:26 2015 -0500
+
+    Fix racey TestAttachAfterDetach
+    
+    Signed-off-by: Brian Goff <cpuguy83@gmail.com>
+
+diff --git a/integration-cli/docker_cli_attach_unix_test.go b/integration-cli/docker_cli_attach_unix_test.go
+index 3fb0ea8..829b14d 100644
+--- a/integration-cli/docker_cli_attach_unix_test.go
++++ b/integration-cli/docker_cli_attach_unix_test.go
+@@ -97,29 +97,40 @@ func TestAttachAfterDetach(t *testing.T) {
+ 	cmd.Stdout = tty
+ 	cmd.Stderr = tty
+ 
+-	go func() {
+-		if err := cmd.Run(); err != nil {
+-			t.Fatalf("attach returned error %s", err)
+-		}
+-		cpty.Close() // unblocks the reader in case of a failure
+-	}()
++	if err := cmd.Start(); err != nil {
++		t.Fatal(err)
++	}
+ 
+-	time.Sleep(500 * time.Millisecond)
+-	cpty.Write([]byte("\n"))
+-	time.Sleep(500 * time.Millisecond)
+ 	bytes := make([]byte, 10)
++	var nBytes int
++	readErr := make(chan error, 1)
+ 
+-	n, err := cpty.Read(bytes)
++	go func() {
++		time.Sleep(500 * time.Millisecond)
++		cpty.Write([]byte("\n"))
++		time.Sleep(500 * time.Millisecond)
+ 
+-	if err != nil {
+-		t.Fatalf("prompt read failed: %v", err)
++		nBytes, err = cpty.Read(bytes)
++		cpty.Close()
++		readErr <- err
++	}()
++
++	select {
++	case err := <-readErr:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(2 * time.Second):
++		t.Fatal("timeout waiting for attach read")
+ 	}
+ 
+-	if !strings.Contains(string(bytes[:n]), "/ #") {
+-		t.Fatalf("failed to get a new prompt. got %s", string(bytes[:n]))
++	if err := cmd.Wait(); err != nil {
++		t.Fatal(err)
+ 	}
+ 
+-	cpty.Write([]byte("exit\n"))
++	if !strings.Contains(string(bytes[:nBytes]), "/ #") {
++		t.Fatalf("failed to get a new prompt. got %s", string(bytes[:nBytes]))
++	}
+ 
+ 	logDone("attach - reconnect after detaching")
+ }

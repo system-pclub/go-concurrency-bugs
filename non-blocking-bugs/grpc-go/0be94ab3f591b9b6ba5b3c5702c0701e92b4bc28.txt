@@ -1,0 +1,21 @@
+commit 0be94ab3f591b9b6ba5b3c5702c0701e92b4bc28
+Author: iamqizhao <toqizhao@gmail.com>
+Date:   Mon Feb 22 16:26:15 2016 -0800
+
+    fix a race between transport creation and wait returning
+
+diff --git a/clientconn.go b/clientconn.go
+index 28e74da..15d7af6 100644
+--- a/clientconn.go
++++ b/clientconn.go
+@@ -539,8 +539,9 @@ func (cc *Conn) Wait(ctx context.Context) (transport.ClientTransport, error) {
+ 			cc.mu.Unlock()
+ 			return nil, ErrClientConnClosing
+ 		case cc.state == Ready:
++			ct := cc.transport
+ 			cc.mu.Unlock()
+-			return cc.transport, nil
++			return ct, nil
+ 		default:
+ 			ready := cc.ready
+ 			if ready == nil {

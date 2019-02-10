@@ -1,0 +1,27 @@
+commit 4bdfc0a46d28f35462a312e1b51a771764321442
+Author: Anthony Romano <anthony.romano@coreos.com>
+Date:   Sun Mar 27 03:39:21 2016 -0700
+
+    clientv3: fix race on writing watch channel over return channel
+    
+    Found in TestElectionFailover
+
+diff --git a/clientv3/watch.go b/clientv3/watch.go
+index d9edd2b..fc49dd1 100644
+--- a/clientv3/watch.go
++++ b/clientv3/watch.go
+@@ -240,11 +240,11 @@ func (w *watcher) addStream(resp *pb.WatchResponse, pendingReq *watchRequest) {
+ 	w.streams[ws.id] = ws
+ 	w.mu.Unlock()
+ 
+-	// send messages to subscriber
+-	go w.serveStream(ws)
+-
+ 	// pass back the subscriber channel for the watcher
+ 	pendingReq.retc <- ret
++
++	// send messages to subscriber
++	go w.serveStream(ws)
+ }
+ 
+ // closeStream closes the watcher resources and removes it

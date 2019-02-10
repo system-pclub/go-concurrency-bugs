@@ -1,0 +1,24 @@
+commit 46b1194d996f6535e657bcb88428303305d3fe68
+Author: Erik Dubbelboer <erik@dubbelboer.com>
+Date:   Sat Dec 6 22:42:32 2014 +0800
+
+    Removed race condition
+    If two interrupts were fired really quickly interruptCount could have been incremented twice before the LoadUint32 making cleanup not being called at all.
+    
+    Signed-off-by: Erik Dubbelboer <erik@dubbelboer.com>
+
+diff --git a/pkg/signal/trap.go b/pkg/signal/trap.go
+index 9be8267..78a709b 100644
+--- a/pkg/signal/trap.go
++++ b/pkg/signal/trap.go
+@@ -34,9 +34,8 @@ func Trap(cleanup func()) {
+ 				case os.Interrupt, syscall.SIGTERM:
+ 					// If the user really wants to interrupt, let him do so.
+ 					if atomic.LoadUint32(&interruptCount) < 3 {
+-						atomic.AddUint32(&interruptCount, 1)
+ 						// Initiate the cleanup only once
+-						if atomic.LoadUint32(&interruptCount) == 1 {
++						if atomic.AddUint32(&interruptCount, 1) == 1 {
+ 							// Call cleanup handler
+ 							cleanup()
+ 							os.Exit(0)

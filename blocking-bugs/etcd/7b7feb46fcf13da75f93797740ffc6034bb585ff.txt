@@ -1,0 +1,20 @@
+commit 7b7feb46fcf13da75f93797740ffc6034bb585ff
+Author: fanmin shi <fanmin.shi@coreos.com>
+Date:   Fri Dec 16 17:11:23 2016 -0800
+
+    leasehttp: buffer error channel to prevent goroutine leak
+
+diff --git a/lease/leasehttp/http.go b/lease/leasehttp/http.go
+index 5e4afde..256051e 100644
+--- a/lease/leasehttp/http.go
++++ b/lease/leasehttp/http.go
+@@ -206,7 +206,8 @@ func TimeToLiveHTTP(ctx context.Context, id lease.LeaseID, keys bool, url string
+ 
+ 	cc := &http.Client{Transport: rt}
+ 	var b []byte
+-	errc := make(chan error)
++	// buffer errc channel so that errc don't block inside the go routinue
++	errc := make(chan error, 2)
+ 	go func() {
+ 		resp, err := cc.Do(req)
+ 		if err != nil {

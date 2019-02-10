@@ -1,0 +1,31 @@
+commit ed6a100ba38dd51b0888b9a3d3ac6bdbb26c528c
+Author: Tobias Schottdorf <tobias.schottdorf@gmail.com>
+Date:   Thu Oct 13 03:04:22 2016 -0400
+
+    log: do not deadlock on failed symlink
+    
+    Seen in #9933, though the issue there (failure to creating the symlink)
+    is not addressed here.
+
+diff --git a/pkg/util/log/clog.go b/pkg/util/log/clog.go
+index 0d0a568..468a4e4 100644
+--- a/pkg/util/log/clog.go
++++ b/pkg/util/log/clog.go
+@@ -689,6 +689,7 @@ func (l *loggingT) putBuffer(b *buffer) {
+ // the data to the log files. If a trace location is set, stack traces
+ // are added to the entry before marshaling.
+ func (l *loggingT) outputLogEntry(s Severity, file string, line int, msg string) {
++	// TODO(tschottdorf): this is a pretty horrible critical section.
+ 	l.mu.Lock()
+ 
+ 	// Set additional details in log entry.
+@@ -727,7 +728,9 @@ func (l *loggingT) outputLogEntry(s Severity, file string, line int, msg string)
+ 			if err := l.createFiles(s); err != nil {
+ 				// Make sure the message appears somewhere.
+ 				l.outputToStderr(entry, stacks)
++				l.mu.Unlock()
+ 				l.exit(err)
++				return
+ 			}
+ 		}
+ 

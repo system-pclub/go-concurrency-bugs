@@ -1,0 +1,26 @@
+commit d7a027e476130efded2005f0b381cd5b283d2978
+Author: Xiang Li <xiangli.cs@gmail.com>
+Date:   Wed Dec 9 10:11:51 2015 -0800
+
+    store: fix data race when modify event in watchHub.
+    
+    The event got from watchHub should be considered as readonly.
+    To modify it, we first need to get a clone of it or there might
+    be a data race.
+
+diff --git a/store/watcher_hub.go b/store/watcher_hub.go
+index d573eb3..25a701c 100644
+--- a/store/watcher_hub.go
++++ b/store/watcher_hub.go
+@@ -78,8 +78,9 @@ func (wh *watcherHub) watch(key string, recursive, stream bool, index, storeInde
+ 	defer wh.mutex.Unlock()
+ 	// If the event exists in the known history, append the EtcdIndex and return immediately
+ 	if event != nil {
+-		event.EtcdIndex = storeIndex
+-		w.eventChan <- event
++		ne := event.Clone()
++		ne.EtcdIndex = storeIndex
++		w.eventChan <- ne
+ 		return w, nil
+ 	}
+ 

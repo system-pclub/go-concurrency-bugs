@@ -1,0 +1,100 @@
+commit 9b00b7ef354725ffa57b3087c8add1990183f205
+Author: Dr. Stefan Schimanski <stefan.schimanski@gmail.com>
+Date:   Thu Nov 5 13:20:29 2015 +0100
+
+    Avoid MockPodsListWatch deadlock of blocked channel while lock is hold
+
+diff --git a/contrib/mesos/pkg/scheduler/plugin_test.go b/contrib/mesos/pkg/scheduler/plugin_test.go
+index 68fa924..016a126 100644
+--- a/contrib/mesos/pkg/scheduler/plugin_test.go
++++ b/contrib/mesos/pkg/scheduler/plugin_test.go
+@@ -184,7 +184,8 @@ func (lw *MockPodsListWatch) Pods() api.PodList {
+ 	lw.lock.Lock()
+ 	defer lw.lock.Unlock()
+ 
+-	return lw.list
++	obj, _ := api.Scheme.DeepCopy(&lw.list)
++	return *(obj.(*api.PodList))
+ }
+ 
+ func (lw *MockPodsListWatch) Pod(name string) *api.Pod {
+@@ -200,44 +201,56 @@ func (lw *MockPodsListWatch) Pod(name string) *api.Pod {
+ 	return nil
+ }
+ func (lw *MockPodsListWatch) Add(pod *api.Pod, notify bool) {
+-	lw.lock.Lock()
+-	defer lw.lock.Unlock()
++	func() {
++		lw.lock.Lock()
++		defer lw.lock.Unlock()
++		lw.list.Items = append(lw.list.Items, *pod)
++	}()
+ 
+-	lw.list.Items = append(lw.list.Items, *pod)
+ 	if notify {
+ 		lw.fakeWatcher.Add(pod)
+ 	}
+ }
+ func (lw *MockPodsListWatch) Modify(pod *api.Pod, notify bool) {
+-	lw.lock.Lock()
+-	defer lw.lock.Unlock()
+-
+-	for i, otherPod := range lw.list.Items {
+-		if otherPod.Name == pod.Name {
+-			lw.list.Items[i] = *pod
+-			if notify {
+-				lw.fakeWatcher.Modify(pod)
++	found := false
++	func() {
++		lw.lock.Lock()
++		defer lw.lock.Unlock()
++
++		for i, otherPod := range lw.list.Items {
++			if otherPod.Name == pod.Name {
++				lw.list.Items[i] = *pod
++				found = true
++				return
+ 			}
+-			return
+ 		}
++		log.Fatalf("Cannot find pod %v to modify in MockPodsListWatch", pod.Name)
++	}()
++
++	if notify && found {
++		lw.fakeWatcher.Modify(pod)
+ 	}
+-	log.Fatalf("Cannot find pod %v to modify in MockPodsListWatch", pod.Name)
+ }
+ 
+ func (lw *MockPodsListWatch) Delete(pod *api.Pod, notify bool) {
+-	lw.lock.Lock()
+-	defer lw.lock.Unlock()
+-
+-	for i, otherPod := range lw.list.Items {
+-		if otherPod.Name == pod.Name {
+-			lw.list.Items = append(lw.list.Items[:i], lw.list.Items[i+1:]...)
+-			if notify {
+-				lw.fakeWatcher.Delete(&otherPod)
++	var notifyPod *api.Pod
++	func() {
++		lw.lock.Lock()
++		defer lw.lock.Unlock()
++
++		for i, otherPod := range lw.list.Items {
++			if otherPod.Name == pod.Name {
++				lw.list.Items = append(lw.list.Items[:i], lw.list.Items[i+1:]...)
++				notifyPod = &otherPod
++				return
+ 			}
+-			return
+ 		}
++		log.Fatalf("Cannot find pod %v to delete in MockPodsListWatch", pod.Name)
++	}()
++
++	if notifyPod != nil && notify {
++		lw.fakeWatcher.Delete(notifyPod)
+ 	}
+-	log.Fatalf("Cannot find pod %v to delete in MockPodsListWatch", pod.Name)
+ }
+ 
+ // Create a pod with a given index, requiring one port

@@ -1,0 +1,20 @@
+commit 6cbb8e070d6c3a66bf48fbe5cbf689557eee23db
+Author: Alexandr Morozov <lk4d4math@gmail.com>
+Date:   Wed Aug 13 17:18:37 2014 +0400
+
+    Fix deadlock on failed dial in UDP userland proxy
+    
+    Signed-off-by: Alexandr Morozov <lk4d4math@gmail.com>
+
+diff --git a/pkg/proxy/udp_proxy.go b/pkg/proxy/udp_proxy.go
+index 14f2306..ae6a7bb 100644
+--- a/pkg/proxy/udp_proxy.go
++++ b/pkg/proxy/udp_proxy.go
+@@ -116,6 +116,7 @@ func (proxy *UDPProxy) Run() {
+ 			proxyConn, err = net.DialUDP("udp", nil, proxy.backendAddr)
+ 			if err != nil {
+ 				log.Printf("Can't proxy a datagram to udp/%s: %s\n", proxy.backendAddr, err)
++				proxy.connTrackLock.Unlock()
+ 				continue
+ 			}
+ 			proxy.connTrackTable[*fromKey] = proxyConn

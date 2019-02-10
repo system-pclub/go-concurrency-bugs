@@ -1,0 +1,72 @@
+commit 1d8813052292e6053957fae01d080fde9717f3fc
+Author: Anthony Romano <anthony.romano@coreos.com>
+Date:   Tue May 31 13:20:36 2016 -0700
+
+    clientv3: fix deadlock on Get with concurrent Close
+
+diff --git a/clientv3/integration/kv_test.go b/clientv3/integration/kv_test.go
+index 8a5050a..cf89247 100644
+--- a/clientv3/integration/kv_test.go
++++ b/clientv3/integration/kv_test.go
+@@ -288,25 +288,19 @@ func TestKVGetErrConnClosed(t *testing.T) {
+ 	cli := clus.Client(0)
+ 	kv := clientv3.NewKV(cli)
+ 
+-	closed, donec := make(chan struct{}), make(chan struct{})
++	donec := make(chan struct{})
+ 	go func() {
+-		select {
+-		case <-time.After(3 * time.Second):
+-			t.Fatal("cli.Close took too long")
+-		case <-closed:
+-		}
+-
+-		if _, err := kv.Get(context.TODO(), "foo"); err != rpctypes.ErrConnClosed {
++		defer close(donec)
++		_, err := kv.Get(context.TODO(), "foo")
++		if err != nil && err != rpctypes.ErrConnClosed {
+ 			t.Fatalf("expected %v, got %v", rpctypes.ErrConnClosed, err)
+ 		}
+-		close(donec)
+ 	}()
+ 
+ 	if err := cli.Close(); err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	clus.TakeClient(0)
+-	close(closed)
+ 
+ 	select {
+ 	case <-time.After(3 * time.Second):
+diff --git a/clientv3/remote_client.go b/clientv3/remote_client.go
+index b8209b8..9fd046d 100644
+--- a/clientv3/remote_client.go
++++ b/clientv3/remote_client.go
+@@ -80,21 +80,23 @@ func (r *remoteClient) tryUpdate() bool {
+ 	return true
+ }
+ 
++// acquire gets the client read lock on an established connection or
++// returns an error without holding the lock.
+ func (r *remoteClient) acquire(ctx context.Context) error {
+ 	for {
++		r.mu.Lock()
+ 		r.client.mu.RLock()
+ 		closed := r.client.cancel == nil
+ 		c := r.client.conn
+-		r.mu.Lock()
+ 		match := r.conn == c
+ 		r.mu.Unlock()
+-		if closed {
+-			return rpctypes.ErrConnClosed
+-		}
+ 		if match {
+ 			return nil
+ 		}
+ 		r.client.mu.RUnlock()
++		if closed {
++			return rpctypes.ErrConnClosed
++		}
+ 		if err := r.reconnectWait(ctx, nil); err != nil {
+ 			return err
+ 		}

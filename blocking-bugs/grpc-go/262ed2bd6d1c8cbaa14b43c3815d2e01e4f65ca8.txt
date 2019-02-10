@@ -1,0 +1,9 @@
+commit 262ed2bd6d1c8cbaa14b43c3815d2e01e4f65ca8
+Merge: 306a1ee 0f4e1e7
+Author: Menghan Li <menghanl@google.com>
+Date:   Fri Apr 22 16:00:04 2016 -0700
+
+    Merge pull request #651 from iamqizhao/master
+    
+    Start reader Goroutine earlier
+

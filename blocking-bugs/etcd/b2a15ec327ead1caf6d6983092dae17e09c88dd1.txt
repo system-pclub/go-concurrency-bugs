@@ -1,0 +1,45 @@
+commit b2a15ec327ead1caf6d6983092dae17e09c88dd1
+Author: Gyuho Lee <gyuhox@gmail.com>
+Date:   Mon Jan 1 17:32:03 2018 -0800
+
+    pkg/expect: fix deadlock in mac OS
+    
+    bufio.NewReader.ReadString blocks even
+    when the process received syscall.SIGKILL.
+    Remove ptyMu mutex and make ReadString return
+    when *os.File is closed.
+    
+    Signed-off-by: Gyuho Lee <gyuhox@gmail.com>
+
+diff --git a/pkg/expect/expect.go b/pkg/expect/expect.go
+index fe27ef7..e022798 100644
+--- a/pkg/expect/expect.go
++++ b/pkg/expect/expect.go
+@@ -33,7 +33,6 @@ type ExpectProcess struct {
+ 	fpty *os.File
+ 	wg   sync.WaitGroup
+ 
+-	ptyMu sync.Mutex // protects accessing fpty
+ 	cond  *sync.Cond // for broadcasting updates are available
+ 	mu    sync.Mutex // protects lines and err
+ 	lines []string
+@@ -76,9 +75,7 @@ func (ep *ExpectProcess) read() {
+ 	printDebugLines := os.Getenv("EXPECT_DEBUG") != ""
+ 	r := bufio.NewReader(ep.fpty)
+ 	for ep.err == nil {
+-		ep.ptyMu.Lock()
+ 		l, rerr := r.ReadString('\n')
+-		ep.ptyMu.Unlock()
+ 		ep.mu.Lock()
+ 		ep.err = rerr
+ 		if l != "" {
+@@ -150,9 +147,7 @@ func (ep *ExpectProcess) close(kill bool) error {
+ 	}
+ 
+ 	err := ep.cmd.Wait()
+-	ep.ptyMu.Lock()
+ 	ep.fpty.Close()
+-	ep.ptyMu.Unlock()
+ 	ep.wg.Wait()
+ 
+ 	if err != nil {

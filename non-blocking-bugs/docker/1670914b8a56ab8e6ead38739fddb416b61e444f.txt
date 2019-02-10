@@ -1,0 +1,27 @@
+commit 1670914b8a56ab8e6ead38739fddb416b61e444f
+Author: Akihiro Suda <suda.akihiro@lab.ntt.co.jp>
+Date:   Tue May 24 11:28:50 2016 +0000
+
+    Fix a race in cmd/dockerd/hack.TestHeaderOverrideHack
+    
+    Fix #22940
+    
+    Signed-off-by: Akihiro Suda <suda.akihiro@lab.ntt.co.jp>
+
+diff --git a/cmd/dockerd/hack/malformed_host_override_test.go b/cmd/dockerd/hack/malformed_host_override_test.go
+index 5bbe840..443da3b 100644
+--- a/cmd/dockerd/hack/malformed_host_override_test.go
++++ b/cmd/dockerd/hack/malformed_host_override_test.go
+@@ -38,9 +38,9 @@ func TestHeaderOverrideHack(t *testing.T) {
+ 	read := make([]byte, 4096)
+ 
+ 	for _, pair := range tests {
+-		go func() {
+-			srv.Write(pair[0])
+-		}()
++		go func(x []byte) {
++			srv.Write(x)
++		}(pair[0])
+ 		n, err := l.Read(read)
+ 		if err != nil && err != io.EOF {
+ 			t.Fatalf("read: %d - %d, err: %v\n%s", n, len(pair[0]), err, string(read[:n]))
