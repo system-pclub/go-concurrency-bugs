@@ -20,11 +20,11 @@ We selected six representative, real-world software written in Go, including two
 #### Bug Taxonomy
 We propose a new method to categorize Go concurrency bugs according to two orthogonal dimensions. The first dimension is based on the behavior of bugs. If one or more goroutines are unintentionally stuck in their execution and cannot move forward, we call such concurrency issues blocking bugs. If instead all goroutines can finish their tasks but their behaviors are not desired, we call them non-blocking ones. The following table  shows the detailed breakdown of bug categories across each application.
 
-<table>
+<table >
   <tr>
     <td rowspan="2">Application</td>
     <td colspan="2">Behavior</td>
-    <td colspan="2">Cause</td>
+    <td colspan="2">Root Cause</td>
   </tr>
   <tr>
     <td >Blocking</td>
@@ -84,16 +84,68 @@ We propose a new method to categorize Go concurrency bugs according to two ortho
 </table>
 
 ### Blocking Bugs
+Overall, we found that there are around 42% blocking bugs caused by errors in protecting shared memory, and 58% are caused by errors in message passing. Considering that shared memory primitives are used more frequently than message passing ones, message passing operations are even more likely to cause blocking bugs.
+
+#### Share Memory
+For example, Docker\#25384, happens with the use of a shared variable of type WaitGroup, as shown in following figure. The Wait() at line 7 can only be unblocked, when Done() at line 5 is invoked len(pm.plugins) times, since len(pm.plugins) is used as parameter to call Add() at line 2. However, the Wait() is called inside the loop, so that it blocks goroutine creation at line 4 in later iterations and it blocks the invocation of Done() inside each created goroutine. The fix of this bug is to move the invocation of Wait() out from the loop.
+```go
+1 var group sync.WaitGroup
+2 group.Add(len(pm.plugins))
+3 for _, p := range pm.plugins {
+4   go func(p *plugin) {
+5    defer group.Done()
+6   }
+7 - group.Wait()
+8 }
+9 + group.Wait()
+```
+
+#### Message Passing
+The following bug is caused by errors in message passing. The finishReq function creates a child goroutine using an anonymous function at line 4 to handle a request---a common practice in Go server programs. The child goroutine executes fn() and sends result back to the parent goroutine through channel ch at line 6.he child will block at line 6 until the parent pulls result from ch at line 9. Meanwhile, the parent will block at select until either when the child sends result to ch (line 9) or when a timeout happens (line 11). If timeout happens earlier or if Go runtime (non-deterministically) chooses the case at line 11 when both cases are valid, the parent will return from requestReq() at line 12, and no one else can pull result from ch any more, resulting in the child being blocked forever.
 
 ```go
-
-
+1 func finishReq(timeout time.Duration) r ob {
+2 -   ch := make(chan ob)
+3 +   ch := make(chan ob, 1)
+4   go func() {
+5     result := fn()
+6     ch <- result // block
+7   } ()
+8   select {
+9     case result = <- ch:
+10       return result
+11     case <- time.After(timeout):
+12       return nil
+13   }
+14 }
 ```
 
 ### Non-Blocking Bugs
+We found around 80% of our collected non-blocking bugs are due to un-protected or wrongly protected shared memory accesses and around 20% are caused by errors in message passing.
+
+#### Shared Memory
+One example from Docker is shown in  following figure. Local variable i is shared between the parent goroutine and the goroutines it creates at line 2. The developer intends each child goroutine uses a distinct i value to initialize string apiVersion at line 4. However, values of apiVersion are non-deterministic in the buggy program. For example, if the child goroutines begin after the whole loop of the parent goroutine finishes, value of apiVersion are all equal to 'v1.21'. The buggy program only produces desired result when each child goroutine initializes string apiVersion immediately after its creation and before {\texttt{i}} is assigned to a new value.
 
 ```go
-
+1  for i := 17; i <= 21; i++ { // write
+2 -   go func() { /* Create a new goroutine */
+3 +   go func(i int) {
+4            apiVersion := fmt.Sprintf("v1.%d", i) // read
+5            ...
+6 -       }()
+7 +       }(i)
+8   }
+```
+#### Message Passing
+Docker\#24007 in following figure is caused by the violation of the rule that a channel can only be closed once. When multiple goroutines execute the piece of code, more than one of them can execute the default clause and try to close the channel at line 5, causing a runtime panic in Go.
+```go
+1 - select {
+2 -   case <- c.closed:
+3 -   default:
+4 +     Once.Do(func() {
+5         close(c.closed)
+6 +     })
+7 - }
 ```
 
 ### Papers
