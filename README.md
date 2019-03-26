@@ -124,7 +124,7 @@ The following bug is caused by errors in message passing. The finishReq function
 We found around 80% of our collected non-blocking bugs are due to un-protected or wrongly protected shared memory accesses and around 20% are caused by errors in message passing.
 
 #### Shared Memory
-One example from Docker is shown in  following figure. Local variable i is shared between the parent goroutine and the goroutines it creates at line 2. The developer intends each child goroutine uses a distinct i value to initialize string apiVersion at line 4. However, values of apiVersion are non-deterministic in the buggy program. For example, if the child goroutines begin after the whole loop of the parent goroutine finishes, value of apiVersion are all equal to 'v1.21'. The buggy program only produces desired result when each child goroutine initializes string apiVersion immediately after its creation and before {\texttt{i}} is assigned to a new value.
+One example from Docker is shown in  following figure. Local variable i is shared between the parent goroutine and the goroutines it creates at line 2. The developer intends each child goroutine uses a distinct i value to initialize string apiVersion at line 4. However, values of apiVersion are non-deterministic in the buggy program. For example, if the child goroutines begin after the whole loop of the parent goroutine finishes, value of apiVersion are all equal to 'v1.21'. The buggy program only produces desired result when each child goroutine initializes string apiVersion immediately after its creation and before i is assigned to a new value.
 
 ```go
 1  for i := 17; i <= 21; i++ { // write
@@ -160,12 +160,12 @@ Docker\#24007 in following figure is caused by the violation of the rule that a 
 }
 
 ### Forum
-<https://golangnews.org/2019/03/understanding-real-world-concurrency-bugs-in-go/> <br/>
-<https://lobste.rs/s/wan3io/understanding_real_world_concurrency> <br/>
-<https://news.ycombinator.com/item?id=19280927> <br/>
-<http://taint.org/2019/03/02/235801a.html> <br/>
-<https://golangweekly.com/issues/251> <br/>
-<https://www.jtolio.com/2016/03/go-channels-are-bad-and-you-should-feel-bad/> <br/>
-<https://www.reddit.com/r/golang/comments/awjf2b/understanding_realworld_concurrency_bugs_in_go_pdf/?ref=readnext> <br/>
-<https://www.bilibili.com/video/av45087132/> <br/>
-<https://youtu.be/ClVrJcTM-lA>
+1. <https://golangnews.org/2019/03/understanding-real-world-concurrency-bugs-in-go/> <br/>
+2. <https://lobste.rs/s/wan3io/understanding_real_world_concurrency> <br/>
+3. <https://news.ycombinator.com/item?id=19280927> <br/>
+4. <http://taint.org/2019/03/02/235801a.html> <br/>
+5. <https://golangweekly.com/issues/251> <br/>
+6. <https://www.jtolio.com/2016/03/go-channels-are-bad-and-you-should-feel-bad/> <br/>
+7. <https://www.reddit.com/r/golang/comments/awjf2b/understanding_realworld_concurrency_bugs_in_go_pdf/?ref=readnext> <br/>
+8. <https://www.bilibili.com/video/av45087132/> <br/>
+9. <https://youtu.be/ClVrJcTM-lA>
