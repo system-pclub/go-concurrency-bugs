@@ -158,3 +158,14 @@ Docker\#24007 in following figure is caused by the violation of the rule that a 
 &nbsp;&nbsp;&nbsp; booktitle = {ASPLOS}, <br />
 &nbsp;&nbsp;&nbsp; year = {2019}, <br />
 }
+
+### Forum
+<https://golangnews.org/2019/03/understanding-real-world-concurrency-bugs-in-go/> <br/>
+<https://lobste.rs/s/wan3io/understanding_real_world_concurrency> <br/>
+<https://news.ycombinator.com/item?id=19280927> <br/>
+<http://taint.org/2019/03/02/235801a.html> <br/>
+<https://golangweekly.com/issues/251> <br/>
+<https://www.jtolio.com/2016/03/go-channels-are-bad-and-you-should-feel-bad/> <br/>
+<https://www.reddit.com/r/golang/comments/awjf2b/understanding_realworld_concurrency_bugs_in_go_pdf/?ref=readnext> <br/>
+<https://www.bilibili.com/video/av45087132/> <br/>
+<https://youtu.be/ClVrJcTM-lA>
