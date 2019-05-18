@@ -168,4 +168,6 @@ Docker\#24007 in following figure is caused by the violation of the rule that a 
 6. <https://www.jtolio.com/2016/03/go-channels-are-bad-and-you-should-feel-bad/> <br/>
 7. <https://www.reddit.com/r/golang/comments/awjf2b/understanding_realworld_concurrency_bugs_in_go_pdf/?ref=readnext> <br/>
 8. <https://www.bilibili.com/video/av45087132/> <br/>
-9. <https://youtu.be/ClVrJcTM-lA>
+9. <https://youtu.be/ClVrJcTM-lA> <br/>
+10. <https://www.jexia.com/en/blog/golang-error-proneness-message-passing/> <br/>
+11. <https://blog.acolyer.org/2019/05/17/understanding-real-world-concurrency-bugs-in-go/>
